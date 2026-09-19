@@ -40,6 +40,8 @@ export type SiteSpeedTestResult = {
   mode: "lobby" | "lobby-table" | "direct-table";
   metricPrefix: string;
   cacheMode: CacheMode;
+  /** Derived: workflow tld !== worker BASE_TLD */
+  isMirror: boolean;
   graphiteNamespace: string;
   potatoContainer: string;
   sitespeedExitCode: number;

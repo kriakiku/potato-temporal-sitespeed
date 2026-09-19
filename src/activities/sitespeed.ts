@@ -8,8 +8,9 @@ import { podman } from "../lib/podman";
 import {
   buildGraphiteNamespace,
   buildResultSlug,
+  resolveIsMirror,
 } from "../shared/graphite-ns";
-import type { CacheMode } from "../shared/types";
+import type { CacheMode, PotatoTier } from "../shared/types";
 
 /**
  * Closest built-in Chrome DevTools preset to Galaxy A05 (no A05 in the list).
@@ -25,6 +26,10 @@ export type RunSitespeedInput = {
   potatoContainer: string;
   url: string;
   metricPrefix: string;
+  country: string;
+  tier: PotatoTier;
+  /** Workflow tld — compared to BASE_TLD for isMirror */
+  tld: string;
   browser: string;
   iterations: number;
   cacheMode: CacheMode;
@@ -34,6 +39,7 @@ export type RunSitespeedResult = {
   exitCode: number;
   graphiteNamespace: string;
   slug: string;
+  isMirror: boolean;
   stdoutTail: string;
   stderrTail: string;
 };
@@ -153,12 +159,17 @@ export async function runSitespeed(
   const env = getEnv();
   assertExportConfig(env);
 
-  const graphiteNamespace = buildGraphiteNamespace(
-    input.metricPrefix,
-    input.cacheMode,
-    env.graphiteNamespaceBase,
-  );
-  const slug = buildResultSlug(input.metricPrefix, input.cacheMode);
+  const isMirror = resolveIsMirror(input.tld, env.baseTld);
+  const dims = {
+    metricPrefix: input.metricPrefix,
+    country: input.country,
+    tier: input.tier,
+    cacheMode: input.cacheMode,
+    isMirror,
+    base: env.graphiteNamespaceBase,
+  };
+  const graphiteNamespace = buildGraphiteNamespace(dims);
+  const slug = buildResultSlug(dims);
 
   const cmd: string[] = [
     "-b",
@@ -261,6 +272,10 @@ export async function runSitespeed(
     graphiteNamespace,
     slug,
     cacheMode: input.cacheMode,
+    country: input.country,
+    tier: input.tier,
+    isMirror,
+    tld: input.tld,
     deviceName: CHROME_DEVICE_NAME,
   });
 
@@ -302,6 +317,7 @@ export async function runSitespeed(
     exitCode: 0,
     graphiteNamespace,
     slug,
+    isMirror,
     stdoutTail: tail(stdout),
     stderrTail: tail(stderr),
   };

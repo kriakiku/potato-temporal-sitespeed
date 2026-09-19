@@ -62,12 +62,26 @@ export type WorkerEnv = {
   graphiteNamespaceBase: string;
   graphiteAuth?: string;
   /**
+   * Primary apex domain (e.g. example.com). When the workflow `tld` differs
+   * (e.g. neo.com), Graphite/S3 keys get isMirror=true. Unset → always false.
+   */
+  baseTld?: string;
+  /**
    * IPv4 (or resolvable name) of the engine host as seen from container
    * networks. Used when GRAPHITE_HOST / S3_ENDPOINT is loopback so sitespeed
    * inside potato netns can reach host services.
    */
   hostGateway?: string;
 };
+
+/** Strip scheme/trailing slash and lowercase for host comparison. */
+export function normalizeHost(host: string): string {
+  return host
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/$/, "")
+    .toLowerCase();
+}
 
 let cached: WorkerEnv | undefined;
 
@@ -108,6 +122,10 @@ export function getEnv(): WorkerEnv {
     graphitePort: optional("GRAPHITE_PORT", "2003")!,
     graphiteNamespaceBase: optional("GRAPHITE_NAMESPACE_BASE", "sitespeed")!,
     graphiteAuth: optional("GRAPHITE_AUTH"),
+    baseTld: (() => {
+      const raw = optional("BASE_TLD");
+      return raw ? normalizeHost(raw) : undefined;
+    })(),
     hostGateway: optional("HOST_GATEWAY"),
   };
 

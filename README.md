@@ -94,8 +94,20 @@ Optional local Temporal: `temporal server start-dev`
 
 sitespeed opens the returned `frameUrl`.
 
-Graphite keys: `{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{cacheMode}.*`  
-S3 slug: `<metricPrefix>-<cacheMode>`
+Graphite keys:
+
+```text
+{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}.*
+```
+
+Example: `sitespeed.lobby.BD.typical.cold.false`
+
+S3 / sitespeed slug: `<metricPrefix>-<country>-<tier>-<cacheMode>-<isMirror>`  
+Example: `lobby-BD-typical-cold-false`
+
+`isMirror` is **derived** (not a workflow input): `true` when workflow `tld` ≠ worker `BASE_TLD` (e.g. `BASE_TLD=example.com` + `tld=neo.com` → `true`). If `BASE_TLD` is unset, `isMirror` is always `false`.
+
+Official sitespeed Grafana dashboards expect a shorter namespace (`base.path.slug`). This layout needs custom panels or Graphite wildcards.
 
 ## Environment
 
@@ -120,7 +132,8 @@ All config is process env (no `.env` file).
 | `S3_FORCE_PATH_STYLE` | `true` if `S3_ENDPOINT` set, else `false` | Path-style URLs (`endpoint/bucket/…`) instead of `bucket.endpoint` |
 | `GRAPHITE_HOST` | — | Skip Graphite if unset. `127.0.0.1`/`localhost` are rewritten to the host gateway for potato netns |
 | `GRAPHITE_PORT` | `2003` | |
-| `GRAPHITE_NAMESPACE_BASE` | `sitespeed` | |
+| `GRAPHITE_NAMESPACE_BASE` | `sitespeed` | First segment of Graphite keys |
+| `BASE_TLD` | — | Primary apex domain (e.g. `example.com`). When workflow `tld` differs (e.g. `neo.com`), keys use `isMirror=true`. Unset → always `false` |
 | `GRAPHITE_AUTH` | — | Optional `user:password` |
 | `HOST_GATEWAY` | auto | Host IPv4 as seen from containers; required if loopback Graphite/S3 and auto-detect fails |
 
