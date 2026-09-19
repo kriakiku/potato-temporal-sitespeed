@@ -28,6 +28,29 @@ Passthrough Potato on the same volume → `POST /v1/catalog/refresh` + `POST /v1
 
 > Temporal TypeScript on Bun is **experimental** (SDK ≥ 1.15). Prefer a dedicated task queue.
 
+## E2E: black screenshot check
+
+Runs **plain** sitespeed (Docker/Podman, no Potato / Temporal / S3) with the same Chrome flags as production, then fails if the largest PNG is ≥ 92% near-black. Use this to see whether black screenshots are a capture/WebGL issue vs Potato MITM.
+
+```bash
+# Fresh frame URL required — #masterSessionId expires
+export SITESPEED_E2E_URL='https://blackjack.winfinity.live/?language=en&tableId=…&streamId=…#masterSessionId=…'
+
+bun run e2e:screenshot
+```
+
+Optional env: `SITESPEED_IMAGE`, `E2E_BLACK_THRESHOLD` (default `0.92`), `E2E_OUT` (default `.e2e-out`), `CONTAINER_ENGINE=docker|podman`.
+
+**Interpreting results**
+
+| Result | Likely meaning |
+|--------|----------------|
+| FAIL mostly black **without** Potato | Chrome/Xvfb did not capture pixels (blank page, expired session, or WebGL/canvas stream) — not only MITM |
+| PASS here, black in prod through Potato | Prefer Potato MITM / cert / shaping |
+| sitespeed exit ≠ 0 | Page load / UrlLoadError — check container logs |
+
+Not run in CI (needs Docker + a live session URL).
+
 ## Quick start
 
 ```bash

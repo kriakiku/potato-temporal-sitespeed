@@ -11,17 +11,13 @@ import {
   buildResultSlug,
   resolveIsMirror,
 } from "../shared/graphite-ns";
+import {
+  buildSitespeedBrowserArgs,
+  CHROME_DEVICE_NAME,
+} from "../shared/sitespeed-args";
 import type { CacheMode, PotatoTier } from "../shared/types";
 
-/**
- * Closest built-in Chrome DevTools preset to Galaxy A05 (no A05 in the list).
- * A51/71: 412×914 CSS @ 2.625 dpr — mid-range Samsung phone class.
- * @see https://developer.chrome.com/docs/chromedriver/mobile-emulation
- */
-export const CHROME_DEVICE_NAME = "Samsung Galaxy A51/71";
-
-/** Mid-range phone CPU slowdown for desktop Chrome emulation. */
-const CPU_THROTTLING_RATE = 4;
+export { CHROME_DEVICE_NAME } from "../shared/sitespeed-args";
 
 export type RunSitespeedInput = {
   potatoContainer: string;
@@ -172,58 +168,19 @@ export async function runSitespeed(
   const graphiteNamespace = buildGraphiteNamespace(dims);
   const slug = buildResultSlug(dims);
 
-  const cmd: string[] = [
-    "-b",
-    input.browser,
-    "-n",
-    String(input.iterations),
-    "--slug",
+  const cmd = buildSitespeedBrowserArgs({
+    browser: input.browser,
+    iterations: input.iterations,
     slug,
-    // Mobile preset for Lighthouse / coach; override Chrome device to A51/71
-    "--mobile",
-    "--browsertime.chrome.mobileEmulation.deviceName",
-    CHROME_DEVICE_NAME,
-    "--browsertime.chrome.CPUThrottlingRate",
-    String(CPU_THROTTLING_RATE),
-    // PotatoNetwork shapes traffic — do not double-throttle in browsertime
-    "-c",
-    "native",
-    "--browsertime.connectivity.engine",
-    "external",
-    // plus1 image also ships GPSI; skip external Google PSI
-    "--plugins.remove",
-    "@sitespeed.io/plugin-gpsi",
-    // Lobby URLs use #masterSessionId=… — SPA wait without baking hash into names
-    "--spa",
-    "--urlAlias",
-    input.metricPrefix,
-    // Potato MITM: Chrome error page (chrome-error://chromewebdata/) without these
-    "--browsertime.chrome.args",
-    "ignore-certificate-errors",
-    "--browsertime.chrome.args",
-    "allow-insecure-localhost",
-    // Transparent MITM often breaks QUIC; force TCP/TLS the proxy can terminate
-    "--browsertime.chrome.args",
-    "disable-quic",
-    // Shaped + heavy lobby JS: give pageCompleteCheck more room than default 60s
-    "--browsertime.timeouts.pageCompleteCheck",
-    "180000",
-    "--browsertime.timeouts.pageLoad",
-    "300000",
-  ];
+    metricPrefix: input.metricPrefix,
+    cacheMode: input.cacheMode,
+    url: input.url,
+    removeLighthouse: !env.sitespeedLighthouse,
+    removeGpsi: true,
+  });
 
-  // Empty Lighthouse category scores → Graphite plugin rejects the message and
-  // sitespeed exits 1. Disable with SITESPEED_LIGHTHOUSE=false when needed.
-  if (!env.sitespeedLighthouse) {
-    cmd.push("--plugins.remove", "@sitespeed.io/plugin-lighthouse");
-  }
-
-  if (input.cacheMode === "warm") {
-    // Same session: hit URL once to fill cache, then measure
-    cmd.push("--preURL", input.url);
-  } else {
-    cmd.push("--browsertime.cacheClearRaw");
-  }
+  // Strip trailing URL so we can insert Graphite/S3 flags before it
+  const measuredUrl = cmd.pop()!;
 
   if (env.graphiteHost) {
     const graphiteHost = await resolveHostForPotatoNetns(env.graphiteHost);
@@ -268,7 +225,7 @@ export async function runSitespeed(
     cmd.push("--s3.removeLocalResult", "true");
   }
 
-  cmd.push(input.url);
+  cmd.push(measuredUrl);
 
   const containerName = `sitespeed-${slug}-${Date.now()}`;
 

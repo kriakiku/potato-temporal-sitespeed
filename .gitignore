@@ -9,3 +9,4 @@ tmp/
 .temporal/
 coverage/
 agent-tools/
+.e2e-out/

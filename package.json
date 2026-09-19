@@ -8,6 +8,7 @@
     "start": "bun run src/worker.ts",
     "start-test": "bun run src/start-test.ts",
     "start-refresh": "bun run src/start-refresh.ts",
+    "e2e:screenshot": "bun run scripts/e2e-screenshot.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -17,11 +18,13 @@
     "@temporalio/common": "^1.24.0",
     "@temporalio/worker": "^1.24.0",
     "@temporalio/workflow": "^1.24.0",
-    "dockerode": "^5.0.1"
+    "dockerode": "^5.0.1",
+    "pngjs": "^7.0.0"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",
     "@types/dockerode": "^4.0.1",
+    "@types/pngjs": "^6.0.5",
     "typescript": "^5.8.3"
   },
   "trustedDependencies": [
