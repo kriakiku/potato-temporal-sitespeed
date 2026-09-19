@@ -1,54 +1,46 @@
-# sitespeed Temporal worker
+# potato-temporal-sitespeed
 
-Bun + TypeScript Temporal worker that runs [sitespeed.io](https://www.sitespeed.io/) through a **per-run** [PotatoNetwork](https://github.com/kriakiku/potato-network) sidecar via **Podman**, then exports results to **S3** and **Graphite** (Grafana).
+Example of wiring **[potato-network](https://github.com/kriakiku/potato-network)** + **[Temporal](https://temporal.io/)** + **[sitespeed.io](https://www.sitespeed.io/)** together.
 
-## What it does
+A Bun Temporal worker starts a per-run PotatoNetwork sidecar (via Podman/Docker Engine API), runs sitespeed.io through that network namespace, and optionally exports results to S3 / Graphite. Treat this repo as a reference integration, not a product.
+
+## Workflows
 
 ### `siteSpeedTestWorkflow`
 
-1. Ensures a shared Podman volume (`POTATO_DATA_VOLUME`) for catalog / baseline / MITM CA
-2. Starts a dedicated PotatoNetwork container with `POTATONETWORK_PROFILE_COUNTRY` / `TIER` from workflow input
-3. Disables PotatoNetwork crons (`POTATONETWORK_CATALOG_CRON=false`, `POTATONETWORK_BASELINE_CRON=false`)
-4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` with `--network container:<potato>` so all traffic (including DNS) goes through PotatoNetwork
-5. Emulates **Samsung Galaxy A51/71** (closest built-in Chrome preset to Galaxy A05), `connectivity=native` (Potato shapes), Lighthouse mobile (GPSI disabled)
-6. Mounts the shared root CA into sitespeed (`NODE_EXTRA_CA_CERTS` / Chrome cert flags)
-7. Pushes metrics to Graphite under `GRAPHITE_NAMESPACE_BASE.<metricPrefix>.<cacheMode>` and HTML results to S3
-8. Stops/removes the PotatoNetwork container
+1. Resolves an entry URL via demo auth APIs (`demo.{tld}` / optional `lobby.{tld}`) **before** Potato starts (auth is not shaped)
+2. Ensures a shared volume for Potato catalog / baseline / MITM CA
+3. Boots PotatoNetwork with `country` + `tier` from the workflow input (crons off)
+4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` with `--network container:<potato>`
+5. Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), `cacheMode` cold|warm
+6. Tears down the Potato container
 
 ### `potatoRefreshWorkflow`
 
-Starts PotatoNetwork on the same shared volume (passthrough, no country profile), then:
-
-- `POST /v1/catalog/refresh`
-- `POST /v1/baseline/probe`
-
-Use a stable workflow id `potato-refresh` (the helper script does this) so refreshes do not overlap.
+Passthrough Potato on the same volume → `POST /v1/catalog/refresh` + `POST /v1/baseline/probe`. Use a stable workflow id (`potato-refresh`).
 
 ## Requirements
 
 - [Bun](https://bun.sh/) ≥ 1.1
-- [Podman](https://podman.io/) on the worker host
-- Temporal Server reachable (`TEMPORAL_ADDRESS`)
-- Network access to pull `ghcr.io/kriakiku/potato-network` and `sitespeedio/sitespeed.io`
+- [Podman](https://podman.io/) (or Docker) on the worker host
+- Temporal Server (`TEMPORAL_ADDRESS`)
+- Pull access to `ghcr.io/kriakiku/potato-network` and `sitespeedio/sitespeed.io`
 
-> Temporal TypeScript workers on Bun are **experimental** (SDK ≥ 1.15). Prefer a dedicated task queue.
+> Temporal TypeScript on Bun is **experimental** (SDK ≥ 1.15). Prefer a dedicated task queue.
 
-## Install
+## Quick start
 
 ```bash
 bun install
-```
 
-## Run the worker
-
-```bash
 export TEMPORAL_ADDRESS=localhost:7233
 export TEMPORAL_TASK_QUEUE=sitespeed
-# optional exports — see Environment below
+export DEMO_AUTH_IDENTIFIER=…
+export DEMO_AUTH_PASSWORD=…
 bun run worker
 ```
 
-## Start a speed test
+Start a test (another terminal):
 
 ```bash
 bun run start-test -- \
@@ -68,18 +60,26 @@ bun run start-test -- \
   --tier typical \
   --tableId t-123 \
   --cacheMode warm
-  # add --direct to set direct=true (default false when tableId is set)
+# add --direct for direct=true (default false when tableId is set)
 ```
 
-### Workflow input
+Refresh Potato catalog/baseline:
+
+```bash
+bun run start-refresh
+```
+
+Optional local Temporal: `temporal server start-dev`
+
+## Workflow input
 
 | Field | Required | Default | Notes |
 |-------|----------|---------|-------|
-| `metricPrefix` | yes | — | Graphite/S3 separator for product area (`lobby`, `table`, …) |
-| `country` | yes | — | PotatoNetwork boot profile (e.g. `BD`) |
-| `tld` | yes | — | Host used in the entry URL (e.g. `example.com`) |
+| `metricPrefix` | yes | — | Graphite/S3 separator (`lobby`, `table`, …) |
+| `country` | yes | — | Potato boot profile (e.g. `BD`) |
+| `tld` | yes | — | Host for auth/entry URL (e.g. `example.com`) |
 | `tier` | no | `typical` | `stable` \| `typical` \| `poor` |
-| `tableId` | no | — | When set, appended as query param |
+| `tableId` | no | — | When set, passed into session / enter-table |
 | `direct` | no | `false` if `tableId` set | Ignored without `tableId` |
 | `browser` | no | `chrome` | sitespeed `-b` |
 | `iterations` | no | `3` | sitespeed `-n` |
@@ -87,115 +87,50 @@ bun run start-test -- \
 
 ### Entry URL
 
-Resolved by a Temporal activity **before** PotatoNetwork/sitespeed start (auth traffic is not shaped):
-
-1. `POST https://demo.{tld}/api/v2/auth/token` with `DEMO_AUTH_IDENTIFIER` / `DEMO_AUTH_PASSWORD`
-2. `POST https://demo.{tld}/api/go/v1/master-sessions/start` with Bearer token  
-   - body `{"extend":true}` or `{"tableId":"…","extend":true}`
-3. If `direct=true` (requires `tableId`):  
-   `POST https://lobby.{tld}/api/v1/enter-table` with `{sessionId: msid, tableId}`
+1. `POST https://demo.{tld}/api/v2/auth/token`
+2. `POST https://demo.{tld}/api/go/v1/master-sessions/start` (Bearer)  
+   body `{"extend":true}` or `{"tableId":"…","extend":true}`
+3. If `direct=true`: `POST https://lobby.{tld}/api/v1/enter-table`
 
 sitespeed opens the returned `frameUrl`.
 
-### Metric separation
-
-Even when every test hits the same domain, Graphite keys use:
-
-```text
-{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{cacheMode}.*
-```
-
-Example: `sitespeed.lobby.cold.*` vs `sitespeed.lobby.warm.*`. Slug is `<metricPrefix>-<cacheMode>` for S3 paths.
-
-### Mobile emulation
-
-Chrome DevTools has **no Galaxy A05** preset. The worker selects the closest built-in Samsung phone:
-
-```text
---browsertime.chrome.mobileEmulation.deviceName "Samsung Galaxy A51/71"
-```
-
-(412×914 CSS @ 2.625 dpr). Also sets `--mobile` so Lighthouse uses its mobile preset, plus `CPUThrottlingRate=4`. Network stays `native` / `external` because PotatoNetwork already shapes traffic.
-
-## Refresh catalog / baseline
-
-```bash
-bun run start-refresh
-```
-
-Schedule this on Temporal (e.g. daily) instead of PotatoNetwork internal crons.
+Graphite keys: `{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{cacheMode}.*`  
+S3 slug: `<metricPrefix>-<cacheMode>`
 
 ## Environment
 
-All configuration is via **process environment variables** (no `.env` file).
+All config is process env (no `.env` file).
 
-### Temporal
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TEMPORAL_ADDRESS` | `localhost:7233` | Host:port |
-| `TEMPORAL_NAMESPACE` | `default` | Namespace |
-| `TEMPORAL_TASK_QUEUE` | `sitespeed` | Task queue |
-
-### PotatoNetwork
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POTATO_IMAGE` | `ghcr.io/kriakiku/potato-network:latest` | Image |
-| `POTATO_DATA_VOLUME` | `potato-network-data` | Shared Podman volume name |
-| `POTATONETWORK_API_TOKEN` | — | Optional Bearer token |
-| `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs to bypass shaping+MITM (merged with auto-resolved S3/Graphite) |
-
-### sitespeed.io
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Browsertime + Lighthouse (GPSI removed at runtime) |
-
-### Demo auth (entry URL)
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DEMO_AUTH_IDENTIFIER` | yes (for tests) | Login / email for `demo.{tld}` token API |
-| `DEMO_AUTH_PASSWORD` | yes (for tests) | Password for token API |
-
-### S3
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `S3_BUCKET` | for upload | Bucket name |
-| `S3_KEY` | for upload | Access key |
-| `S3_SECRET` | for upload | Secret |
-| `S3_ENDPOINT` | no | Custom endpoint (MinIO, etc.) |
-| `S3_REGION` | no | Region |
-| `S3_RESULT_BASE_URL` | no | Public base URL for Grafana links |
-
-### Graphite
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GRAPHITE_HOST` | — | If unset, Graphite export is skipped |
-| `GRAPHITE_PORT` | `2003` | Carbon plaintext port |
-| `GRAPHITE_NAMESPACE_BASE` | `sitespeed` | Prefixed with `metricPrefix` |
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `TEMPORAL_ADDRESS` | `localhost:7233` | |
+| `TEMPORAL_NAMESPACE` | `default` | |
+| `TEMPORAL_TASK_QUEUE` | `sitespeed` | |
+| `POTATO_IMAGE` | `ghcr.io/kriakiku/potato-network:latest` | |
+| `POTATO_DATA_VOLUME` | `potato-network-data` | Shared volume name |
+| `POTATONETWORK_API_TOKEN` | — | Optional |
+| `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Graphite |
+| `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse |
+| `DEMO_AUTH_IDENTIFIER` | — | Required for tests |
+| `DEMO_AUTH_PASSWORD` | — | Required for tests |
+| `S3_BUCKET` / `S3_KEY` / `S3_SECRET` | — | Upload when all three set |
+| `S3_ENDPOINT` / `S3_REGION` / `S3_RESULT_BASE_URL` | — | Optional |
+| `GRAPHITE_HOST` | — | Skip Graphite if unset |
+| `GRAPHITE_PORT` | `2003` | |
+| `GRAPHITE_NAMESPACE_BASE` | `sitespeed` | |
 | `GRAPHITE_AUTH` | — | Optional `user:password` |
 
-Put Graphite/S3 addresses (or their CIDRs) into `POTATONETWORK_SHAPE_EXCLUDE` for anything beyond auto-detection. On each PotatoNetwork start the worker resolves `GRAPHITE_HOST`, `S3_ENDPOINT` / bucket region hosts, and `S3_RESULT_BASE_URL` to IPv4 and appends them to `POTATONETWORK_SHAPE_EXCLUDE` so result upload is not shaped/MITM’d.
-
-## Local Temporal (optional)
-
-```bash
-temporal server start-dev
-```
+On each Potato start the worker resolves Graphite/S3 hosts to IPv4 and appends them to `POTATONETWORK_SHAPE_EXCLUDE` so result upload is not shaped/MITM’d.
 
 ## Docker
 
-Image is published to GHCR on every push to `main` (and on `v*` tags):
+Published to GHCR on push to `main` / `v*` tags:
 
 ```text
 ghcr.io/kriakiku/potato-temporal-sitespeed:latest
 ```
 
-The worker uses [dockerode](https://www.npmjs.com/package/dockerode) against the host Engine API. Socket is auto-detected (**Podman first**, then Docker): `/run/podman/podman.sock`, `$XDG_RUNTIME_DIR/podman/podman.sock`, `/run/user/$UID/podman/podman.sock`, then `/var/run/docker.sock` / `/run/docker.sock`.
+Engine socket is auto-detected (Podman first, then Docker): `/run/podman/podman.sock`, `$XDG_RUNTIME_DIR/podman/podman.sock`, `/run/user/$UID/podman/podman.sock`, then `/var/run/docker.sock` / `/run/docker.sock`.
 
 ```bash
 podman run --rm -d \
@@ -210,27 +145,24 @@ podman run --rm -d \
   ghcr.io/kriakiku/potato-temporal-sitespeed:latest
 ```
 
-Build locally:
-
 ```bash
 podman build -t potato-temporal-sitespeed .
 ```
 
 ## Dependabot
 
-Weekly Dependabot updates (Bun deps, GitHub Actions, Docker base images). After the **CI** workflow succeeds on a Dependabot PR, **Dependabot auto-merge** squash-merges it automatically.
+Weekly updates (Bun, Actions, Docker base). After **CI** passes on a Dependabot PR, **Dependabot auto-merge** squash-merges it.
 
 ## Layout
 
 ```text
 src/
-  worker.ts                 # Worker process
-  start-test.ts             # CLI to start siteSpeedTestWorkflow
-  start-refresh.ts          # CLI to start potatoRefreshWorkflow
-  workflows/index.ts
-  activities/               # Podman + Potato API + sitespeed
-  shared/                   # Workflow-safe helpers (URL, types, namespace)
-  lib/                      # env + podman wrapper
-.github/workflows/publish.yml
+  worker.ts
+  start-test.ts / start-refresh.ts
+  workflows/
+  activities/
+  shared/
+  lib/
+.github/workflows/
 Dockerfile
 ```
