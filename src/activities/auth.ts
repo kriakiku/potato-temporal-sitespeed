@@ -1,3 +1,4 @@
+import { log } from "@temporalio/activity";
 import { optional, required } from "../lib/env";
 import { generateTotpCode } from "../lib/totp";
 
@@ -12,6 +13,11 @@ export type ResolveEntryUrlResult = {
   frameUrl: string;
   msid: string;
   mode: "lobby" | "lobby-table" | "direct-table";
+};
+
+export type DeleteMasterSessionInput = {
+  tld: string;
+  msid: string;
 };
 
 type AuthTokenResponse = {
@@ -38,6 +44,10 @@ type AuthTokenBody = {
   identifier: string;
   extra?: { code: string };
 };
+
+function normalizeTld(tld: string): string {
+  return tld.replace(/^https?:\/\//, "").replace(/\/$/, "");
+}
 
 async function postJson<T>(
   url: string,
@@ -72,25 +82,10 @@ async function postJson<T>(
   return json as T;
 }
 
-/**
- * Authenticate against demo.{tld}, start a master session, and optionally
- * enter a table directly. Returns the frameUrl sitespeed should open.
- *
- * Modes:
- * - no tableId → lobby frameUrl from master-sessions/start
- * - tableId, direct=false → lobby+table frameUrl from master-sessions/start
- * - tableId, direct=true (default) → game frameUrl from lobby enter-table
- *
- * When `DEMO_AUTH_AUTHENTICATOR` is set (base32 TOTP secret), the auth/token
- * body includes `extra: { code }` from the current authenticator code.
- */
-export async function resolveEntryUrl(
-  input: ResolveEntryUrlInput,
-): Promise<ResolveEntryUrlResult> {
+async function fetchDemoAccessToken(tld: string): Promise<string> {
   const identifier = required("DEMO_AUTH_IDENTIFIER");
   const password = required("DEMO_AUTH_PASSWORD");
   const authenticator = optional("DEMO_AUTH_AUTHENTICATOR");
-  const tld = input.tld.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
   const authBody: AuthTokenBody = { password, identifier };
   if (authenticator) {
@@ -106,6 +101,26 @@ export async function resolveEntryUrl(
   if (!accessToken) {
     throw new Error("auth/token response missing tokenData.accessToken");
   }
+  return accessToken;
+}
+
+/**
+ * Authenticate against demo.{tld}, start a master session, and optionally
+ * enter a table directly. Returns the frameUrl sitespeed should open.
+ *
+ * Modes:
+ * - no tableId → lobby frameUrl from master-sessions/start
+ * - tableId, direct=false → lobby+table frameUrl from master-sessions/start
+ * - tableId, direct=true (default) → game frameUrl from lobby enter-table
+ *
+ * When `DEMO_AUTH_AUTHENTICATOR` is set (base32 TOTP secret), the auth/token
+ * body includes `extra: { code }` from the current authenticator code.
+ */
+export async function resolveEntryUrl(
+  input: ResolveEntryUrlInput,
+): Promise<ResolveEntryUrlResult> {
+  const tld = normalizeTld(input.tld);
+  const accessToken = await fetchDemoAccessToken(tld);
 
   const startBody: { extend: true; tableId?: string } = { extend: true };
   if (input.tableId) {
@@ -147,6 +162,34 @@ export async function resolveEntryUrl(
     msid,
     mode: input.tableId ? "lobby-table" : "lobby",
   };
+}
+
+/**
+ * Best-effort cleanup of a demo master session created by resolveEntryUrl.
+ * Re-authenticates (token from start may have expired on long sitespeed runs).
+ */
+export async function deleteMasterSession(
+  input: DeleteMasterSessionInput,
+): Promise<void> {
+  const tld = normalizeTld(input.tld);
+  const msid = input.msid.trim();
+  if (!msid) return;
+
+  try {
+    const accessToken = await fetchDemoAccessToken(tld);
+    await postJson(
+      `https://demo.${tld}/api/go/v1/master-sessions/bulk-delete`,
+      { masterSessionIds: [msid] },
+      { authorization: `Bearer ${accessToken}` },
+    );
+    log.info("Deleted demo master session", { tld, msid });
+  } catch (err) {
+    log.warn("Failed to delete demo master session", {
+      tld,
+      msid,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /** Drop redundant `:443` on https URLs (enter-table sometimes includes it). */

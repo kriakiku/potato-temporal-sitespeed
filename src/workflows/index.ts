@@ -20,6 +20,7 @@ const {
   refreshPotatoCatalog,
   refreshPotatoBaseline,
   resolveEntryUrl,
+  deleteMasterSession,
   pullUsedImages,
 } = proxyActivities<typeof activities>({
   startToCloseTimeout: "30 minutes",
@@ -55,47 +56,57 @@ export async function siteSpeedTestWorkflow(
     direct: normalized.direct,
   });
 
-  await ensurePotatoVolume();
-
-  const potato = await startPotato({
-    runId,
-    country: normalized.country,
-    tier: normalized.tier,
-    namePrefix: "potato-ss",
-  });
-
   try {
-    await waitPotatoHealthy(potato);
+    await ensurePotatoVolume();
 
-    const result = await runSitespeed({
-      potatoContainer: potato.containerName,
-      url: entry.frameUrl,
-      metricPrefix: normalized.metricPrefix,
+    const potato = await startPotato({
+      runId,
       country: normalized.country,
       tier: normalized.tier,
-      tld: normalized.tld,
-      browser: normalized.browser,
-      iterations: normalized.iterations,
-      cacheMode: normalized.cacheMode,
-      direct: normalized.direct,
+      namePrefix: "potato-ss",
     });
 
-    return {
-      url: entry.frameUrl,
-      msid: entry.msid,
-      mode: entry.mode,
-      metricPrefix: normalized.metricPrefix,
-      cacheMode: normalized.cacheMode,
-      direct: normalized.direct,
-      isMirror: result.isMirror,
-      graphiteNamespace: result.graphiteNamespace,
-      potatoContainer: potato.containerName,
-      sitespeedExitCode: result.exitCode,
-    };
+    try {
+      await waitPotatoHealthy(potato);
+
+      const result = await runSitespeed({
+        potatoContainer: potato.containerName,
+        url: entry.frameUrl,
+        metricPrefix: normalized.metricPrefix,
+        country: normalized.country,
+        tier: normalized.tier,
+        tld: normalized.tld,
+        browser: normalized.browser,
+        iterations: normalized.iterations,
+        cacheMode: normalized.cacheMode,
+        direct: normalized.direct,
+      });
+
+      return {
+        url: entry.frameUrl,
+        msid: entry.msid,
+        mode: entry.mode,
+        metricPrefix: normalized.metricPrefix,
+        cacheMode: normalized.cacheMode,
+        direct: normalized.direct,
+        isMirror: result.isMirror,
+        graphiteNamespace: result.graphiteNamespace,
+        potatoContainer: potato.containerName,
+        sitespeedExitCode: result.exitCode,
+      };
+    } finally {
+      // Always tear down Potato even when the workflow is cancelled mid-run.
+      await CancellationScope.nonCancellable(async () => {
+        await stopPotato(potato);
+      });
+    }
   } finally {
-    // Always tear down Potato even when the workflow is cancelled mid-run.
+    // Always delete the demo master session (success, failure, or cancel).
     await CancellationScope.nonCancellable(async () => {
-      await stopPotato(potato);
+      await deleteMasterSession({
+        tld: normalized.tld,
+        msid: entry.msid,
+      });
     });
   }
 }

@@ -123,8 +123,9 @@ Cancel: Temporal workflow cancellation is supported — Potato containers are al
 
 1. `POST https://demo.{tld}/api/v2/auth/token` — body `{ password, identifier }` and, when `DEMO_AUTH_AUTHENTICATOR` is set, `extra: { code }` (current TOTP)
 2. `POST https://demo.{tld}/api/go/v1/master-sessions/start` (Bearer)  
-   body `{"extend":true}` or `{"tableId":"…","extend":true}`
+   body `{"extend":true}` or `{"tableId":"…","extend":true}` — returns `frameUrl` + `msid`
 3. If `direct=true` **and** `tableId` is set: `POST https://lobby.{tld}/api/v1/enter-table`
+4. After the run (success, failure, or cancel): `POST https://demo.{tld}/api/go/v1/master-sessions/bulk-delete` with `{ "masterSessionIds": [msid] }` (re-auth; best-effort)
 
 sitespeed opens the returned `frameUrl`.
 

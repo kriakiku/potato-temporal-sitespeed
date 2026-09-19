@@ -12,6 +12,6 @@ export {
 
 export { runSitespeed } from "./sitespeed";
 
-export { resolveEntryUrl } from "./auth";
+export { resolveEntryUrl, deleteMasterSession } from "./auth";
 
 export { pullUsedImages } from "./pull-images";
