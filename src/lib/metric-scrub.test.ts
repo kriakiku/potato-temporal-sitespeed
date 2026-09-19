@@ -4,7 +4,7 @@ import {
   scrubHostForMetrics,
   scrubPathForMetrics,
 } from "./metric-scrub";
-import { buildTelegrafPoints } from "../activities/sitespeed";
+import { buildInfluxPoints } from "../activities/sitespeed";
 
 describe("metric-scrub", () => {
   test("strip query and hash", () => {
@@ -24,9 +24,9 @@ describe("metric-scrub", () => {
   });
 });
 
-describe("buildTelegrafPoints http/ws", () => {
+describe("buildInfluxPoints http/ws", () => {
   test("emits http, duplicates, websocket with scrubbed host", () => {
-    const points = buildTelegrafPoints({
+    const points = buildInfluxPoints({
       tags: { metricPrefix: "lobby", country: "BD" },
       workflowTld: "example.com",
       browsertime: {},
@@ -71,7 +71,7 @@ describe("buildTelegrafPoints http/ws", () => {
   });
 
   test("emits potato_http_slow with rank and scrubbed tags", () => {
-    const points = buildTelegrafPoints({
+    const points = buildInfluxPoints({
       tags: { metricPrefix: "lobby", country: "BD" },
       workflowTld: "example.com",
       browsertime: {},
@@ -108,5 +108,32 @@ describe("buildTelegrafPoints http/ws", () => {
     expect(slow[0]!.fields.durationMs).toBe(900);
     expect(slow[1]!.tags?.rank).toBe("2");
     expect(slow[1]!.fields.failed).toBe(true);
+  });
+
+  test("emits potato_cf_cache per status", () => {
+    const points = buildInfluxPoints({
+      tags: { metricPrefix: "lobby", country: "BD" },
+      workflowTld: "example.com",
+      browsertime: {},
+      profile: {},
+      baseline: {},
+      stats: {
+        dns: [],
+        tlsClient: [],
+        tlsUpstream: [],
+        cfCache: { HIT: 10, MISS: 3, DYNAMIC: 7, NONE: 2 },
+      },
+    });
+    const cf = points.filter((p) => p.measurement === "potato_cf_cache");
+    expect(cf).toHaveLength(4);
+    const byStatus = Object.fromEntries(
+      cf.map((p) => [p.tags?.status, p.fields.count]),
+    );
+    expect(byStatus).toEqual({
+      DYNAMIC: 7,
+      HIT: 10,
+      MISS: 3,
+      NONE: 2,
+    });
   });
 });

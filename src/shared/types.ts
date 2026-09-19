@@ -20,6 +20,11 @@ export type SiteSpeedTestInput = {
   iterations?: number;
   /** Default: cold */
   cacheMode?: CacheMode;
+  /**
+   * Chrome DevTools CPUThrottlingRate (e.g. 4 = 4× slower).
+   * Unset → no CPU throttling (network shaping via Potato only).
+   */
+  cpuThrottlingRate?: number;
 };
 
 export type NormalizedSiteSpeedTestInput = {
@@ -32,6 +37,8 @@ export type NormalizedSiteSpeedTestInput = {
   browser: string;
   iterations: number;
   cacheMode: CacheMode;
+  /** Present only when set on input (≥ 1). */
+  cpuThrottlingRate?: number;
 };
 
 export type SiteSpeedTestResult = {

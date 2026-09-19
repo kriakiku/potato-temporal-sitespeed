@@ -267,6 +267,8 @@ export type PotatoStatsSnapshot = {
   events?: PotatoStatsEvent[];
   /** Top-N longest HTTP start→response samples (not WS). */
   slowHTTP?: PotatoHTTPSample[];
+  /** Cloudflare cf-cache-status → count; "NONE" = not Cloudflare. */
+  cfCache?: Record<string, number>;
 };
 
 export type PotatoStatsEvent = {

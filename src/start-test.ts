@@ -1,5 +1,6 @@
 import { Client, Connection } from "@temporalio/client";
 import { getEnv } from "./lib/env";
+import { temporalConnectionOptions } from "./lib/temporal-connect";
 import type { SiteSpeedTestInput } from "./shared/types";
 
 function arg(name: string): string | undefined {
@@ -20,11 +21,12 @@ async function main(): Promise<void> {
   const tld = arg("tld");
   if (!metricPrefix || !country || !tld) {
     console.error(
-      "Usage: bun run src/start-test.ts --metricPrefix lobby --country BD --tld example.com [--tableId ID] [--direct] [--tier typical] [--cacheMode cold|warm]",
+      "Usage: bun run src/start-test.ts --metricPrefix lobby --country BD --tld example.com [--tableId ID] [--direct] [--tier typical] [--cacheMode cold|warm] [--cpuThrottlingRate 4]",
     );
     process.exit(1);
   }
 
+  const cpuRateRaw = arg("cpuThrottlingRate");
   const input: SiteSpeedTestInput = {
     metricPrefix,
     country,
@@ -35,9 +37,12 @@ async function main(): Promise<void> {
     browser: arg("browser"),
     iterations: arg("iterations") ? Number(arg("iterations")) : undefined,
     cacheMode: (arg("cacheMode") as SiteSpeedTestInput["cacheMode"]) ?? undefined,
+    cpuThrottlingRate: cpuRateRaw !== undefined ? Number(cpuRateRaw) : undefined,
   };
 
-  const connection = await Connection.connect({ address: env.temporalAddress });
+  const connection = await Connection.connect(
+    await temporalConnectionOptions(env),
+  );
   const client = new Client({
     connection,
     namespace: env.temporalNamespace,

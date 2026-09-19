@@ -4,10 +4,13 @@ import {
   WorkflowExecutionAlreadyStartedError,
 } from "@temporalio/client";
 import { getEnv } from "./lib/env";
+import { temporalConnectionOptions } from "./lib/temporal-connect";
 
 async function main(): Promise<void> {
   const env = getEnv();
-  const connection = await Connection.connect({ address: env.temporalAddress });
+  const connection = await Connection.connect(
+    await temporalConnectionOptions(env),
+  );
   const client = new Client({
     connection,
     namespace: env.temporalNamespace,

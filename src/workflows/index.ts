@@ -81,6 +81,7 @@ export async function siteSpeedTestWorkflow(
         iterations: normalized.iterations,
         cacheMode: normalized.cacheMode,
         direct: normalized.direct,
+        cpuThrottlingRate: normalized.cpuThrottlingRate,
       });
 
       return {

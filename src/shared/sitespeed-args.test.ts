@@ -35,5 +35,21 @@ describe("buildSitespeedBrowserArgs overlay flags", () => {
     expect(args).not.toContain("--preURL");
     expect(args).toContain("--browsertime.timeouts.elementWait");
     expect(args).toContain("60000");
+    expect(args).not.toContain("--browsertime.chrome.CPUThrottlingRate");
+  });
+
+  test("cpuThrottlingRate adds Chrome CPUThrottlingRate", () => {
+    const args = buildSitespeedBrowserArgs({
+      browser: "chrome",
+      iterations: 1,
+      slug: "test",
+      metricPrefix: "lobby",
+      cacheMode: "cold",
+      url: "https://example.com/",
+      cpuThrottlingRate: 4,
+    });
+    const i = args.indexOf("--browsertime.chrome.CPUThrottlingRate");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args[i + 1]).toBe("4");
   });
 });

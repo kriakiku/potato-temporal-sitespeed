@@ -7,7 +7,7 @@ A Bun Temporal worker starts a per-run PotatoNetwork sidecar (via Podman/Docker 
 1. Parses sitespeed JSON (`analysisstorer`)
 2. Enriches with Potato profile / baseline / catalog + DNS/TLS/HTTP/WS stats (+ event timeline)
 3. Burns a **custom video overlay** (ASS + FFmpeg) onto the recorded mp4
-4. Emits **Influx line protocol** to [Telegraf](https://github.com/influxdata/telegraf) (`socket_listener`)
+4. Emits **Influx line protocol** over HTTP to [VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/integrations/datain/) (`/write`) or any Influx-compatible endpoint
 5. Optionally uploads screenshot/video/HTML to S3 itself
 
 Treat this repo as a reference integration, not a product.
@@ -20,8 +20,8 @@ Treat this repo as a reference integration, not a product.
 2. Ensures a shared volume for Potato catalog / baseline / MITM CA
 3. Boots PotatoNetwork with `country` + `tier` from the workflow input (crons off)
 4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` with `--network container:<potato>`, bind-mounted result dir, `--plugins.add analysisstorer`, `--video`, `--browsertime.videoParams.addTimer false`, browsertime `--script` for first-iframe timing, and a **multi journey** that taps `[data-test-id="fullScreen"]` when present
-5. Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), `--cpu` / `--sustainable.enable` / `--axe.enable`, `cacheMode` cold|warm
-6. Worker post-process: custom overlay burn-in → Telegraf metrics + optional S3 upload
+5. Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), `--cpu` / `--sustainable.enable` / `--axe.enable`, optional `cpuThrottlingRate` (Chrome CPU slowdown, off when unset), `cacheMode` cold|warm
+6. Worker post-process: custom overlay burn-in → Influx metrics write + optional S3 upload
 7. Tears down the Potato container
 
 ### `potatoRefreshWorkflow`
@@ -37,7 +37,7 @@ Use a stable workflow id (`potato-refresh`). Does not recreate the Temporal work
 - [Podman](https://podman.io/) (or Docker) on the worker host
 - Temporal Server (`TEMPORAL_ADDRESS`)
 - Pull access to `ghcr.io/kriakiku/potato-network` and `sitespeedio/sitespeed.io`
-- Optional: Telegraf with `[[inputs.socket_listener]]` (`data_format = "influx"`)
+- Optional: VictoriaMetrics (or Influx) reachable via `INFLUX_WRITE_URL`
 - Optional: S3-compatible bucket for latest screenshot/video/HTML
 
 > Temporal TypeScript on Bun is **experimental** (SDK ≥ 1.15). Prefer a dedicated task queue.
@@ -88,10 +88,19 @@ bun install
 
 export TEMPORAL_ADDRESS=localhost:7233
 export TEMPORAL_TASK_QUEUE=sitespeed
+# Optional mTLS to a remote Temporal Frontend:
+# export TEMPORAL_TLS=true
+# export TEMPORAL_TLS_CERT_PATH=/certs/client.pem
+# export TEMPORAL_TLS_KEY_PATH=/certs/client.key
+# export TEMPORAL_TLS_CA_PATH=/certs/ca.pem
+# export TEMPORAL_TLS_SERVER_NAME=temporal.example.com
 export DEMO_AUTH_IDENTIFIER=…
 export DEMO_AUTH_PASSWORD=…
 # Optional metrics / artifacts
-export TELEGRAF_ADDR=udp://127.0.0.1:8094
+export INFLUX_WRITE_URL=http://127.0.0.1:8428/write
+# export INFLUX_WRITE_USERNAME=writer
+# export INFLUX_WRITE_PASSWORD=secret
+# export INFLUX_WRITE_TOKEN=…
 export SITESPEED_RESULTS_DIR=/tmp/potato-sitespeed-results
 bun run worker
 ```
@@ -140,6 +149,7 @@ Optional local Temporal: `temporal server start-dev`
 | `browser` | no | `chrome` | sitespeed `-b` |
 | `iterations` | no | `3` | sitespeed `-n` |
 | `cacheMode` | no | `cold` | `cold` (clear cache) \| `warm` (`--preURL` then measure) |
+| `cpuThrottlingRate` | no | — | Chrome `CPUThrottlingRate` (integer ≥ 1, e.g. `4`). Unset → no CPU throttling |
 
 Cancel: Temporal workflow cancellation is supported — Potato containers are always stopped in a non-cancellable cleanup (`finally`), including when the run is cancelled mid-sitespeed.
 
@@ -168,15 +178,21 @@ Examples:
 
 `isMirror` is **derived**: `true` when workflow `tld` ≠ worker `BASE_TLD`. If `BASE_TLD` is unset, always `false`.
 
-### Telegraf
+### Influx write (VictoriaMetrics)
 
-Worker emits Influx line protocol to `TELEGRAF_ADDR` (UDP by default). Example Telegraf input:
+Worker POSTs Influx line protocol to `INFLUX_WRITE_URL` (appends `precision=ns` when missing). Auth via ENV:
 
-```toml
-[[inputs.socket_listener]]
-  service_address = "udp://:8094"
-  data_format = "influx"
+```bash
+export INFLUX_WRITE_URL=http://victoriametrics:8428/write
+export INFLUX_WRITE_USERNAME=writer
+export INFLUX_WRITE_PASSWORD=secret
+# or Bearer (takes precedence over Basic):
+# export INFLUX_WRITE_TOKEN=…
 ```
+
+Cluster example: `http://vminsert:8480/insert/0/influx/write`.
+
+Grafana reads VictoriaMetrics as a Prometheus datasource — no Telegraf required.
 
 Measurements (tags include `metricPrefix`, `country`, `tier`, `cacheMode`, `direct`, `isMirror`, `browser`, `connectivity` — **not** the page URL):
 
@@ -191,6 +207,7 @@ Measurements (tags include `metricPrefix`, `country`, `tier`, `cacheMode`, `dire
 | `potato_http_duplicate` | same tags when `count > 1` (`extraCount` = duplicates beyond the first) |
 | `potato_websocket` | per `host`+`path`: `started` (upgrade attempts), first-frame latency |
 | `potato_http_slow` | top-5 longest HTTP start→response from Potato MITM (`rank` 1–5, scrubbed `host`/`method`/`path`, `durationMs`, `failed`) — metrics only, not on video |
+| `potato_cf_cache` | per `status` tag: raw `cf-cache-status` (`HIT`, `MISS`, `DYNAMIC`, …) or `NONE` (not Cloudflare); field `count` |
 | `potato_overlay` | `wsMarkers` / `apiMarkers` counts, `wsShown`/`apiShown` (≤6), `firstIframeMs`, `burned` |
 
 Host tags replace the workflow `tld` apex with `{tld}` (e.g. `api.example.com` → `api.{tld}`). Query strings never appear in tags.
@@ -205,13 +222,13 @@ Browsertime’s built-in timer overlay is **off** (`--browsertime.videoParams.ad
 4. Builds an ASS subtitle (running `t`, `nav`, `iframe`, sliding last **6** WS + last **6** non-static API lines) and burns it with FFmpeg from the sitespeed image
 5. Keeps a `*.raw.mp4` copy beside the replaced `chrome.native.mp4` (S3 still uploads the overlaid file)
 
-API markers skip static extensions (`.js`, `.css`, images, fonts, …). Labels use the same `{tld}` / no-query scrubbing as Telegraf tags.
+API markers skip static extensions (`.js`, `.css`, images, fonts, …). Labels use the same `{tld}` / no-query scrubbing as Influx tags.
 
 ### Fullscreen tap
 
 Each run stages a browsertime **multi journey** (`bt-measure-journey.js`) that navigates the entry URL under `commands.measure`, waits up to 60s for `[data-test-id="fullScreen"]` (presence gate only), then **Selenium Actions-taps the viewport center** if the marker appeared (no-op if missing). Warm cache does a pre-navigate inside the same script.
 
-Unset `TELEGRAF_ADDR` → metrics emit is skipped (logged once).
+Unset `INFLUX_WRITE_URL` → metrics emit is skipped (logged once).
 
 ### S3 result URLs (worker upload)
 
@@ -242,19 +259,27 @@ All config is process env (no `.env` file).
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `TEMPORAL_ADDRESS` | `localhost:7233` | |
+| `TEMPORAL_ADDRESS` | `localhost:7233` | Frontend gRPC `host:port` |
 | `TEMPORAL_NAMESPACE` | `default` | |
 | `TEMPORAL_TASK_QUEUE` | `sitespeed` | |
+| `TEMPORAL_TLS` | — | `true`/`false`. Unset → TLS on when cert/CA set, else plaintext |
+| `TEMPORAL_TLS_CERT_PATH` | — | Client cert PEM (mTLS; requires `TEMPORAL_TLS_KEY_PATH`) |
+| `TEMPORAL_TLS_KEY_PATH` | — | Client key PEM (mTLS; requires `TEMPORAL_TLS_CERT_PATH`) |
+| `TEMPORAL_TLS_CA_PATH` | — | Optional server CA PEM |
+| `TEMPORAL_TLS_SERVER_NAME` | — | Optional TLS SNI override |
 | `POTATO_IMAGE` | `ghcr.io/kriakiku/potato-network:latest` | |
 | `POTATO_DATA_VOLUME` | `potato-network-data` | Shared volume name |
 | `POTATO_RULES_EXPR` | — | Absolute **engine-host** path to `rules.expr`; bind-mounted to `/data/rules.expr` |
 | `POTATONETWORK_API_TOKEN` | — | Optional |
-| `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Telegraf |
+| `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Influx write host |
 | `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse. Worker installs Potato MITM CA + `ignore-certificate-errors` / `disable-quic` |
 | `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse |
 | `SITESPEED_MAX_ATTEMPTS` | `1` | Temporal activity retries for `runSitespeed` |
 | `SITESPEED_RESULTS_DIR` | `/tmp/potato-sitespeed-results` | Absolute engine-host path for result trees |
-| `TELEGRAF_ADDR` | — | `udp://host:8094` / `tcp://host:8094` / `host:8094`. Skip emit if unset |
+| `INFLUX_WRITE_URL` | — | HTTP write URL (e.g. `http://vm:8428/write`). Skip emit if unset |
+| `INFLUX_WRITE_USERNAME` / `INFLUX_WRITE_PASSWORD` | — | Optional Basic auth |
+| `INFLUX_WRITE_TOKEN` | — | Optional Bearer token (wins over Basic) |
+| `INFLUX_WRITE_TIMEOUT_MS` | `45000` | HTTP timeout for metric write |
 | `ARTIFACT_NAMESPACE_BASE` | `sitespeed` | First segment of S3 prefix (`GRAPHITE_NAMESPACE_BASE` still accepted as alias) |
 | `DEMO_AUTH_IDENTIFIER` | — | Required for tests |
 | `DEMO_AUTH_PASSWORD` | — | Required for tests |
@@ -265,7 +290,22 @@ All config is process env (no `.env` file).
 | `BASE_TLD` | — | Primary apex; differing workflow `tld` → `isMirror=true` |
 | `HOST_GATEWAY` | auto | Host IPv4 for loopback rewrite / shape exclude |
 
-On each Potato start the worker resolves Telegraf/S3 hosts to IPv4 and appends them to `POTATONETWORK_SHAPE_EXCLUDE` so export endpoints are not shaped/MITM’d.
+### Temporal TLS / mTLS
+
+Unset TLS vars → plaintext (default). For remote Frontend with mTLS:
+
+```bash
+export TEMPORAL_ADDRESS=temporal.example.com:7233
+export TEMPORAL_TLS=true
+export TEMPORAL_TLS_CERT_PATH=/certs/client.pem
+export TEMPORAL_TLS_KEY_PATH=/certs/client.key
+export TEMPORAL_TLS_CA_PATH=/certs/ca.pem   # optional
+export TEMPORAL_TLS_SERVER_NAME=temporal.example.com  # optional SNI
+```
+
+Cert and key must be set together. Same ENV applies to `worker`, `start-test`, and `start-refresh`. Mount cert files into the worker container when running under Podman/Docker.
+
+On each Potato start the worker resolves Influx write / S3 hosts to IPv4 and appends them to `POTATONETWORK_SHAPE_EXCLUDE` so export endpoints are not shaped/MITM’d.
 
 ### Custom path-delay rules (`POTATO_RULES_EXPR`)
 
@@ -290,7 +330,9 @@ podman run --rm -d \
   -e DEMO_AUTH_PASSWORD=… \
   -e POTATO_RULES_EXPR=/etc/potato/rules.expr \
   -v /etc/potato/rules.expr:/etc/potato/rules.expr:ro \
-  -e TELEGRAF_ADDR=udp://telegraf:8094 \
+  -e INFLUX_WRITE_URL=http://victoriametrics:8428/write \
+  -e INFLUX_WRITE_USERNAME=writer \
+  -e INFLUX_WRITE_PASSWORD=secret \
   -e SITESPEED_RESULTS_DIR=/tmp/potato-sitespeed-results \
   -e BASE_TLD=example.com \
   -e S3_BUCKET=… -e S3_KEY=… -e S3_SECRET=… \
@@ -314,7 +356,7 @@ src/
   workflows/
   activities/
   shared/
-  lib/          # telegraf, sitespeed-json, s3-latest, …
+  lib/          # influx, sitespeed-json, s3-latest, …
 .github/workflows/
 Dockerfile
 ```

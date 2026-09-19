@@ -2,11 +2,16 @@ import { createRequire } from "node:module";
 import { NativeConnection, Worker } from "@temporalio/worker";
 import * as activities from "./activities/index";
 import { getEnv } from "./lib/env";
+import {
+  temporalConnectionOptions,
+  temporalTlsLogFlags,
+} from "./lib/temporal-connect";
 
 const require = createRequire(import.meta.url);
 
 async function main(): Promise<void> {
   const env = getEnv();
+  const tlsFlags = temporalTlsLogFlags(env);
 
   console.log(
     JSON.stringify({
@@ -14,20 +19,23 @@ async function main(): Promise<void> {
       address: env.temporalAddress,
       namespace: env.temporalNamespace,
       taskQueue: env.temporalTaskQueue,
+      temporalTls: tlsFlags.temporalTls,
+      temporalTlsClientCert: tlsFlags.temporalTlsClientCert,
+      temporalTlsCa: tlsFlags.temporalTlsCa,
       potatoImage: env.potatoImage,
       sitespeedImage: env.sitespeedImage,
       sitespeedMaxAttempts: env.sitespeedMaxAttempts,
       sitespeedResultsDir: env.sitespeedResultsDir,
-      telegrafAddr: env.telegrafAddr ?? null,
+      influxWriteUrl: env.influxWriteUrl ?? null,
       volume: env.potatoDataVolume,
       potatoRulesExpr: env.potatoRulesExpr ?? null,
       hostGateway: env.hostGateway ?? null,
     }),
   );
 
-  const connection = await NativeConnection.connect({
-    address: env.temporalAddress,
-  });
+  const connection = await NativeConnection.connect(
+    await temporalConnectionOptions(env),
+  );
 
   // Inject SITESPEED_MAX_ATTEMPTS into the workflow bundle as a string literal
   // so workflow code stays deterministic (no runtime process.env in the isolate).

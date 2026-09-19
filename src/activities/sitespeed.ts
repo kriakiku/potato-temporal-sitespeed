@@ -30,9 +30,9 @@ import {
   type SitespeedTimingFields,
 } from "../lib/sitespeed-json";
 import {
-  emitTelegraf,
-  type TelegrafPoint,
-} from "../lib/telegraf";
+  emitInfluxWrite,
+  type InfluxPoint,
+} from "../lib/influx";
 import {
   buildArtifactNamespace,
   buildResultSlug,
@@ -70,6 +70,8 @@ export type RunSitespeedInput = {
   cacheMode: CacheMode;
   /** Folded into artifact namespace / Telegraf tags */
   direct: boolean;
+  /** Chrome CPUThrottlingRate when set (integer ≥ 1). */
+  cpuThrottlingRate?: number;
 };
 
 export type RunSitespeedResult = {
@@ -175,7 +177,7 @@ function latencyFields(
   };
 }
 
-export function buildTelegrafPoints(input: {
+export function buildInfluxPoints(input: {
   tags: Record<string, string>;
   workflowTld: string;
   browsertime: SitespeedTimingFields;
@@ -193,8 +195,8 @@ export function buildTelegrafPoints(input: {
     firstIframeMs: number;
     burned: boolean;
   };
-}): TelegrafPoint[] {
-  const points: TelegrafPoint[] = [];
+}): InfluxPoint[] {
+  const points: InfluxPoint[] = [];
   const { tags, workflowTld } = input;
 
   if (Object.keys(input.browsertime).length) {
@@ -319,6 +321,20 @@ export function buildTelegrafPoints(input: {
     });
   }
 
+  const cf = input.stats.cfCache;
+  if (cf) {
+    const statuses = Object.keys(cf).sort();
+    for (const status of statuses) {
+      const count = cf[status];
+      if (typeof count !== "number" || !Number.isFinite(count)) continue;
+      points.push({
+        measurement: "potato_cf_cache",
+        tags: { ...tags, status },
+        fields: { count },
+      });
+    }
+  }
+
   if (input.overlay) {
     points.push({
       measurement: "potato_overlay",
@@ -400,6 +416,7 @@ export async function runSitespeed(
     multiScriptPath: CONTAINER_MEASURE_JOURNEY,
     removeLighthouse: !env.sitespeedLighthouse,
     removeGpsi: true,
+    cpuThrottlingRate: input.cpuThrottlingRate,
   });
 
   const containerName = `sitespeed-${slug}-${Date.now()}`;
@@ -411,6 +428,7 @@ export async function runSitespeed(
     slug,
     resultDir,
     cacheMode: input.cacheMode,
+    cpuThrottlingRate: input.cpuThrottlingRate ?? null,
     country: input.country,
     tier: input.tier,
     isMirror,
@@ -550,9 +568,9 @@ export async function runSitespeed(
     });
   }
 
-  heartbeat({ step: "telegraf-emit" });
+  heartbeat({ step: "influx-emit" });
   try {
-    const points = buildTelegrafPoints({
+    const points = buildInfluxPoints({
       tags,
       workflowTld: input.tld,
       browsertime,
@@ -564,10 +582,19 @@ export async function runSitespeed(
       stats,
       overlay: overlayMeta,
     });
-    const emit = await emitTelegraf(env.telegrafAddr, points);
-    log.info("Telegraf emit", emit);
+    const emit = await emitInfluxWrite(
+      env.influxWriteUrl,
+      points,
+      {
+        username: env.influxWriteUsername,
+        password: env.influxWritePassword,
+        token: env.influxWriteToken,
+      },
+      { timeoutMs: env.influxWriteTimeoutMs },
+    );
+    log.info("Influx write", emit);
   } catch (err) {
-    log.warn("Telegraf emit failed", {
+    log.warn("Influx write failed", {
       err: err instanceof Error ? err.message : String(err),
     });
   }

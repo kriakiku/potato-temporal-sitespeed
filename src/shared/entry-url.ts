@@ -43,6 +43,17 @@ export function normalizeSiteSpeedInput(
     throw new Error(`cacheMode must be cold|warm (got: ${cacheMode})`);
   }
 
+  let cpuThrottlingRate: number | undefined;
+  if (input.cpuThrottlingRate !== undefined && input.cpuThrottlingRate !== null) {
+    const rate = Number(input.cpuThrottlingRate);
+    if (!Number.isInteger(rate) || rate < 1) {
+      throw new Error(
+        `cpuThrottlingRate must be an integer >= 1 (got: ${input.cpuThrottlingRate})`,
+      );
+    }
+    cpuThrottlingRate = rate;
+  }
+
   return {
     metricPrefix,
     country,
@@ -56,5 +67,6 @@ export function normalizeSiteSpeedInput(
         ? input.iterations
         : DEFAULT_ITERATIONS,
     cacheMode,
+    cpuThrottlingRate,
   };
 }

@@ -7,8 +7,8 @@ import type { CacheMode } from "./types";
  */
 export const CHROME_DEVICE_NAME = "Samsung Galaxy A51/71";
 
-/** Mid-range phone CPU slowdown for desktop Chrome emulation. */
-export const CPU_THROTTLING_RATE = 4;
+/** Example mid-range phone slowdown (document in README; rate comes from workflow input). */
+export const CPU_THROTTLING_RATE_EXAMPLE = 4;
 
 export type SitespeedBrowserArgsInput = {
   browser: string;
@@ -31,6 +31,8 @@ export type SitespeedBrowserArgsInput = {
   removeLighthouse?: boolean;
   /** Remove GPSI plugin (default true — plus1 image ships it). */
   removeGpsi?: boolean;
+  /** Chrome CPUThrottlingRate when set (integer ≥ 1). */
+  cpuThrottlingRate?: number;
 };
 
 /**
@@ -59,8 +61,6 @@ export function buildSitespeedBrowserArgs(
     "--mobile",
     "--browsertime.chrome.mobileEmulation.deviceName",
     CHROME_DEVICE_NAME,
-    "--browsertime.chrome.CPUThrottlingRate",
-    String(CPU_THROTTLING_RATE),
     // PotatoNetwork shapes traffic — do not double-throttle in browsertime
     "-c",
     "native",
@@ -89,6 +89,17 @@ export function buildSitespeedBrowserArgs(
     "--browsertime.timeouts.elementWait",
     "60000",
   ];
+
+  if (
+    input.cpuThrottlingRate !== undefined &&
+    Number.isInteger(input.cpuThrottlingRate) &&
+    input.cpuThrottlingRate >= 1
+  ) {
+    cmd.push(
+      "--browsertime.chrome.CPUThrottlingRate",
+      String(input.cpuThrottlingRate),
+    );
+  }
 
   if (input.scriptPath) {
     cmd.push("--browsertime.script", input.scriptPath);

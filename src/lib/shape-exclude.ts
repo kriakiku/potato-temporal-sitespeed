@@ -3,7 +3,6 @@ import { Resolver } from "node:dns/promises";
 import type { WorkerEnv } from "./env";
 import { extractHostname } from "./hostname";
 import { resolveHostForPotatoNetns } from "./host-gateway";
-import { parseTelegrafAddr } from "./telegraf";
 
 export { extractHostname };
 
@@ -28,14 +27,10 @@ function s3Hostnames(env: WorkerEnv): string[] {
   return hosts;
 }
 
-function telegrafHostnames(env: WorkerEnv): string[] {
-  if (!env.telegrafAddr) return [];
-  try {
-    const { host } = parseTelegrafAddr(env.telegrafAddr);
-    return [host];
-  } catch {
-    return [];
-  }
+function influxWriteHostnames(env: WorkerEnv): string[] {
+  if (!env.influxWriteUrl) return [];
+  const h = extractHostname(env.influxWriteUrl);
+  return h ? [h] : [];
 }
 
 async function resolveHostToIpv4(host: string): Promise<string[]> {
@@ -64,7 +59,7 @@ async function resolveHostToIpv4(host: string): Promise<string[]> {
 
 /**
  * Build POTATONETWORK_SHAPE_EXCLUDE: manual env entries plus resolved
- * IPv4 addresses for Telegraf and S3 endpoints.
+ * IPv4 addresses for Influx write URL and S3 endpoints.
  */
 export async function buildShapeExclude(env: WorkerEnv): Promise<string> {
   const manual = (env.potatoShapeExclude ?? "")
@@ -73,7 +68,7 @@ export async function buildShapeExclude(env: WorkerEnv): Promise<string> {
     .filter(Boolean);
 
   const rawHosts = [
-    ...new Set([...telegrafHostnames(env), ...s3Hostnames(env)]),
+    ...new Set([...influxWriteHostnames(env), ...s3Hostnames(env)]),
   ];
 
   const hostnames: string[] = [];

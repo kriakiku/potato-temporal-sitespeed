@@ -32,10 +32,32 @@ function optionalInt(name: string, fallback: number): number {
   return n;
 }
 
+function optionalBoolFlag(name: string): boolean | undefined {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (value === undefined || value === "") return undefined;
+  if (["1", "true", "yes", "on"].includes(value)) return true;
+  if (["0", "false", "no", "off"].includes(value)) return false;
+  throw new Error(
+    `${name} must be a boolean (true/false), got: ${process.env[name]}`,
+  );
+}
+
 export type WorkerEnv = {
   temporalAddress: string;
   temporalNamespace: string;
   temporalTaskQueue: string;
+  /**
+   * Force Temporal TLS on/off. Unset → on when certs/CA present, else plaintext.
+   */
+  temporalTls?: boolean;
+  /** Client certificate PEM path (mTLS; requires temporalTlsKeyPath). */
+  temporalTlsCertPath?: string;
+  /** Client private key PEM path (mTLS; requires temporalTlsCertPath). */
+  temporalTlsKeyPath?: string;
+  /** Optional server root CA PEM path. */
+  temporalTlsCaPath?: string;
+  /** Optional TLS SNI / serverNameOverride. */
+  temporalTlsServerName?: string;
   potatoImage: string;
   potatoDataVolume: string;
   potatoApiToken?: string;
@@ -76,11 +98,16 @@ export type WorkerEnv = {
    */
   sitespeedResultsDir: string;
   /**
-   * Telegraf socket_listener address for Influx line protocol
-   * (`udp://host:8094`, `tcp://host:8094`, or `host:8094` → UDP).
-   * Unset → skip metric emit.
+   * HTTP URL for Influx line protocol writes (VictoriaMetrics `/write`,
+   * cluster `/insert/.../influx/write`, etc.). Unset → skip metric emit.
    */
-  telegrafAddr?: string;
+  influxWriteUrl?: string;
+  influxWriteUsername?: string;
+  influxWritePassword?: string;
+  /** Bearer token; preferred over Basic when set. */
+  influxWriteToken?: string;
+  /** HTTP timeout for Influx write (default 45000). */
+  influxWriteTimeoutMs: number;
   /** First segment of artifact namespace / S3 prefix (was GRAPHITE_NAMESPACE_BASE). */
   artifactNamespaceBase: string;
   /**
@@ -90,7 +117,7 @@ export type WorkerEnv = {
   baseTld?: string;
   /**
    * IPv4 (or resolvable name) of the engine host as seen from container
-   * networks. Used when TELEGRAF_ADDR / S3_ENDPOINT is loopback so services
+   * networks. Used when INFLUX_WRITE_URL / S3_ENDPOINT is loopback so services
    * inside potato netns (shape exclude) and worker can reach host listeners.
    */
   hostGateway?: string;
@@ -118,6 +145,11 @@ export function getEnv(): WorkerEnv {
     temporalAddress: optional("TEMPORAL_ADDRESS", "localhost:7233")!,
     temporalNamespace: optional("TEMPORAL_NAMESPACE", "default")!,
     temporalTaskQueue: optional("TEMPORAL_TASK_QUEUE", "sitespeed")!,
+    temporalTls: optionalBoolFlag("TEMPORAL_TLS"),
+    temporalTlsCertPath: optional("TEMPORAL_TLS_CERT_PATH"),
+    temporalTlsKeyPath: optional("TEMPORAL_TLS_KEY_PATH"),
+    temporalTlsCaPath: optional("TEMPORAL_TLS_CA_PATH"),
+    temporalTlsServerName: optional("TEMPORAL_TLS_SERVER_NAME"),
     potatoImage: optional(
       "POTATO_IMAGE",
       "ghcr.io/kriakiku/potato-network:latest",
@@ -149,7 +181,11 @@ export function getEnv(): WorkerEnv {
       "SITESPEED_RESULTS_DIR",
       "/tmp/potato-sitespeed-results",
     )!,
-    telegrafAddr: optional("TELEGRAF_ADDR"),
+    influxWriteUrl: optional("INFLUX_WRITE_URL"),
+    influxWriteUsername: optional("INFLUX_WRITE_USERNAME"),
+    influxWritePassword: optional("INFLUX_WRITE_PASSWORD"),
+    influxWriteToken: optional("INFLUX_WRITE_TOKEN"),
+    influxWriteTimeoutMs: optionalInt("INFLUX_WRITE_TIMEOUT_MS", 45_000),
     artifactNamespaceBase: namespaceBase,
     baseTld: (() => {
       const raw = optional("BASE_TLD");
