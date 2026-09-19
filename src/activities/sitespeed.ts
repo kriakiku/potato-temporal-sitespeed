@@ -84,7 +84,7 @@ export async function runSitespeed(
   ];
 
   // Empty Lighthouse category scores → Graphite plugin rejects the message and
-  // sitespeed exits 1. Opt in with SITESPEED_LIGHTHOUSE=true when LH works.
+  // sitespeed exits 1. Disable with SITESPEED_LIGHTHOUSE=false when needed.
   if (!env.sitespeedLighthouse) {
     cmd.push("--plugins.remove", "@sitespeed.io/plugin-lighthouse");
   }

@@ -112,7 +112,7 @@ All config is process env (no `.env` file).
 | `POTATONETWORK_API_TOKEN` | — | Optional |
 | `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Graphite |
 | `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse available |
-| `SITESPEED_LIGHTHOUSE` | `false` | Set `true` to keep Lighthouse; empty LH scores otherwise crash Graphite export |
+| `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse if empty scores crash Graphite export |
 | `DEMO_AUTH_IDENTIFIER` | — | Required for tests |
 | `DEMO_AUTH_PASSWORD` | — | Required for tests |
 | `S3_BUCKET` / `S3_KEY` / `S3_SECRET` | — | Upload when all three set |

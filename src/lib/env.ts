@@ -52,9 +52,9 @@ export type WorkerEnv = {
    */
   s3ForcePathStyle: boolean;
   /**
-   * Run @sitespeed.io/plugin-lighthouse (plus1 image). Default false: empty
-   * Lighthouse scores (common behind Potato MITM / SPAs) make the Graphite
-   * plugin throw "No data to send" and fail the whole run.
+   * Run @sitespeed.io/plugin-lighthouse (plus1 image). Default true.
+   * Set false if empty Lighthouse scores make Graphite throw
+   * "No data to send" and fail the run.
    */
   sitespeedLighthouse: boolean;
   graphiteHost?: string;
@@ -103,7 +103,7 @@ export function getEnv(): WorkerEnv {
       "S3_FORCE_PATH_STYLE",
       Boolean(optional("S3_ENDPOINT")),
     ),
-    sitespeedLighthouse: optionalBool("SITESPEED_LIGHTHOUSE", false),
+    sitespeedLighthouse: optionalBool("SITESPEED_LIGHTHOUSE", true),
     graphiteHost: optional("GRAPHITE_HOST"),
     graphitePort: optional("GRAPHITE_PORT", "2003")!,
     graphiteNamespaceBase: optional("GRAPHITE_NAMESPACE_BASE", "sitespeed")!,
