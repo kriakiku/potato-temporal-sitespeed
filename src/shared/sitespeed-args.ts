@@ -58,6 +58,10 @@ export function buildSitespeedBrowserArgs(
     "allow-insecure-localhost",
     "--browsertime.chrome.args",
     "disable-quic",
+    // Chrome timeline + long tasks; sustainability + axe plugins
+    "--cpu",
+    "--sustainable.enable",
+    "--axe.enable",
     "--browsertime.timeouts.pageCompleteCheck",
     "180000",
     "--browsertime.timeouts.pageLoad",
