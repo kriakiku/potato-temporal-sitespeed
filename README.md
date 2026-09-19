@@ -115,7 +115,8 @@ All config is process env (no `.env` file).
 | `DEMO_AUTH_IDENTIFIER` | — | Required for tests |
 | `DEMO_AUTH_PASSWORD` | — | Required for tests |
 | `S3_BUCKET` / `S3_KEY` / `S3_SECRET` | — | Upload when all three set |
-| `S3_ENDPOINT` / `S3_REGION` / `S3_RESULT_BASE_URL` | — | Optional |
+| `S3_ENDPOINT` / `S3_REGION` / `S3_RESULT_BASE_URL` | — | Optional; endpoint must include `http://` or `https://` |
+| `S3_FORCE_PATH_STYLE` | `true` if `S3_ENDPOINT` set, else `false` | Path-style URLs (`endpoint/bucket/…`) instead of `bucket.endpoint` |
 | `GRAPHITE_HOST` | — | Skip Graphite if unset |
 | `GRAPHITE_PORT` | `2003` | |
 | `GRAPHITE_NAMESPACE_BASE` | `sitespeed` | |

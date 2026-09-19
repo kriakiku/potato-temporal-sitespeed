@@ -12,6 +12,16 @@ function optional(name: string, fallback?: string): string | undefined {
   return fallback;
 }
 
+function optionalBool(name: string, fallback: boolean): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (value === undefined || value === "") return fallback;
+  if (["1", "true", "yes", "on"].includes(value)) return true;
+  if (["0", "false", "no", "off"].includes(value)) return false;
+  throw new Error(
+    `${name} must be a boolean (true/false), got: ${process.env[name]}`,
+  );
+}
+
 export type WorkerEnv = {
   temporalAddress: string;
   temporalNamespace: string;
@@ -36,6 +46,11 @@ export type WorkerEnv = {
   s3Bucket?: string;
   s3Region?: string;
   s3ResultBaseUrl?: string;
+  /**
+   * Use path-style S3 URLs (endpoint/bucket/…) instead of virtual-hosted
+   * (bucket.endpoint/…). Defaults to true when S3_ENDPOINT is set.
+   */
+  s3ForcePathStyle: boolean;
   graphiteHost?: string;
   graphitePort: string;
   graphiteNamespaceBase: string;
@@ -71,6 +86,11 @@ export function getEnv(): WorkerEnv {
     s3Bucket: optional("S3_BUCKET"),
     s3Region: optional("S3_REGION"),
     s3ResultBaseUrl: optional("S3_RESULT_BASE_URL"),
+    // Custom endpoints (MinIO, Ceph, …) usually need path-style addressing
+    s3ForcePathStyle: optionalBool(
+      "S3_FORCE_PATH_STYLE",
+      Boolean(optional("S3_ENDPOINT")),
+    ),
     graphiteHost: optional("GRAPHITE_HOST"),
     graphitePort: optional("GRAPHITE_PORT", "2003")!,
     graphiteNamespaceBase: optional("GRAPHITE_NAMESPACE_BASE", "sitespeed")!,

@@ -102,6 +102,9 @@ export async function runSitespeed(
     cmd.push("--s3.secret", env.s3Secret);
     if (env.s3Endpoint) cmd.push("--s3.endpoint", env.s3Endpoint);
     if (env.s3Region) cmd.push("--s3.region", env.s3Region);
+    if (env.s3ForcePathStyle) {
+      cmd.push("--s3.options.forcePathStyle", "true");
+    }
     if (env.s3ResultBaseUrl) {
       cmd.push("--resultBaseURL", env.s3ResultBaseUrl);
     }
