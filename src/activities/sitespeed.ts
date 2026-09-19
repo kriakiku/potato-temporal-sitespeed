@@ -15,6 +15,7 @@ import {
   buildSitespeedBrowserArgs,
   CHROME_DEVICE_NAME,
 } from "../shared/sitespeed-args";
+import { sitespeedPotatoEntrypoint } from "../shared/sitespeed-entrypoint";
 import type { CacheMode, PotatoTier } from "../shared/types";
 
 export { CHROME_DEVICE_NAME } from "../shared/sitespeed-args";
@@ -113,41 +114,12 @@ export function summarizeSitespeedFailure(
  * then exec the image ENTRYPOINT (/start.sh), which runs sitespeed.js.
  *
  * The plus1 image has no `sitespeed.io` on PATH — Docker ENTRYPOINT is /start.sh.
- * bash -c '…; exec /start.sh "$@"' name -- args… keeps args unquoted safely.
  */
 function sitespeedEntrypointCmd(args: string[]): {
   entrypoint: string[];
   cmd: string[];
 } {
-  const script = [
-    "set +e",
-    'CA=/potato-data/ca/potatonetwork-ca.pem',
-    'if [ -f "$CA" ]; then',
-    "  mkdir -p /usr/local/share/ca-certificates /etc/ssl/certs 2>/dev/null",
-    '  cp "$CA" /usr/local/share/ca-certificates/potatonetwork.crt 2>/dev/null',
-    '  cp "$CA" /etc/ssl/certs/potatonetwork.pem 2>/dev/null',
-    "  command -v update-ca-certificates >/dev/null && update-ca-certificates >/dev/null 2>&1",
-    // Chrome NSS DB (image pre-inits /root/.pki/nssdb; start.sh sets HOME=/tmp)
-    '  if command -v certutil >/dev/null; then',
-    '    for db in /root/.pki/nssdb /tmp/.pki/nssdb; do',
-    '      mkdir -p "$db" 2>/dev/null',
-    '      if [ ! -f "$db/cert9.db" ] && [ ! -f "$db/cert8.db" ]; then',
-    '        certutil -d "sql:$db" -N --empty-password >/dev/null 2>&1',
-    "      fi",
-    '      certutil -d "sql:$db" -D -n potatonetwork >/dev/null 2>&1',
-    '      certutil -d "sql:$db" -A -t "C,," -n potatonetwork -i "$CA" >/dev/null 2>&1',
-    "    done",
-    "  fi",
-    "fi",
-    "set -e",
-    'exec /start.sh "$@"',
-  ].join("\n");
-
-  return {
-    entrypoint: ["/bin/bash", "-c"],
-    // $0 = sitespeed-wrap; "$@" = sitespeed CLI args
-    cmd: [script, "sitespeed-wrap", ...args],
-  };
+  return sitespeedPotatoEntrypoint(args);
 }
 
 export async function runSitespeed(

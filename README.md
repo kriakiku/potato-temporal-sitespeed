@@ -30,23 +30,29 @@ Passthrough Potato on the same volume → `POST /v1/catalog/refresh` + `POST /v1
 
 ## E2E: black screenshot check
 
-Runs **plain** sitespeed (Docker/Podman, no Potato / Temporal / S3) with the same Chrome flags as production, then fails if the largest PNG is ≥ 92% near-black. Use this to see whether black screenshots are a capture/WebGL issue vs Potato MITM.
+Runs sitespeed through **PotatoNetwork** (same `--network container:…` + MITM CA install as production), then fails if the page screenshot is ≥ 92% near-black.
 
 ```bash
 # Fresh frame URL required — #masterSessionId expires
 export SITESPEED_E2E_URL='https://blackjack.winfinity.live/?language=en&tableId=…&streamId=…#masterSessionId=…'
 
 bun run e2e:screenshot
+
+# Optional country profile (default: passthrough)
+E2E_COUNTRY=DE E2E_TIER=typical bun run e2e:screenshot
+
+# Plain sitespeed without Potato (isolate capture vs MITM)
+E2E_PLAIN=1 bun run e2e:screenshot
 ```
 
-Optional env: `SITESPEED_IMAGE`, `E2E_BLACK_THRESHOLD` (default `0.92`), `E2E_OUT` (default `.e2e-out`), `CONTAINER_ENGINE=docker|podman`.
+Optional env: `POTATO_IMAGE`, `SITESPEED_IMAGE`, `E2E_BLACK_THRESHOLD` (default `0.92`), `E2E_OUT` (default `.e2e-out`), `CONTAINER_ENGINE=docker|podman`.
 
 **Interpreting results**
 
 | Result | Likely meaning |
 |--------|----------------|
-| FAIL mostly black **without** Potato | Chrome/Xvfb did not capture pixels (blank page, expired session, or WebGL/canvas stream) — not only MITM |
-| PASS here, black in prod through Potato | Prefer Potato MITM / cert / shaping |
+| FAIL through Potato, PASS with `E2E_PLAIN=1` | Potato MITM / cert / shaping |
+| FAIL with `E2E_PLAIN=1` | Chrome/Xvfb capture, expired session, or WebGL/canvas |
 | sitespeed exit ≠ 0 | Page load / UrlLoadError — check container logs |
 
 Not run in CI (needs Docker + a live session URL).
