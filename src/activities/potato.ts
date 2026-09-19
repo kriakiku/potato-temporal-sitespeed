@@ -25,13 +25,9 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-async function fetchHealth(apiBaseUrl: string, token?: string): Promise<boolean> {
+async function fetchHealth(apiBaseUrl: string): Promise<boolean> {
   try {
-    const headers: Record<string, string> = {};
-    // health is public, but keep token unused
-    void token;
     const res = await fetch(`${apiBaseUrl}/v1/health`, {
-      headers,
       signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) return false;
@@ -86,47 +82,36 @@ export async function startPotato(input: StartPotatoInput): Promise<PotatoHandle
   const env = getEnv();
   const containerName = containerNameFor(input.runId, input.namePrefix ?? "potato");
 
-  // Remove any leftover with the same name
-  await podman.rm(containerName, true);
-
-  const args = [
-    "run",
-    "-d",
-    "--name",
-    containerName,
-    "--cap-add",
-    "NET_ADMIN",
-    // Random host port → container 7783 for API health/refresh from the worker host
-    "-p",
-    "127.0.0.1::7783",
-    "-v",
-    `${env.potatoDataVolume}:/data`,
-    "-e",
-    "POTATONETWORK_CATALOG_CRON=false",
-    "-e",
-    "POTATONETWORK_BASELINE_CRON=false",
-  ];
-
+  const containerEnv: Record<string, string> = {
+    POTATONETWORK_CATALOG_CRON: "false",
+    POTATONETWORK_BASELINE_CRON: "false",
+  };
   if (input.country) {
-    args.push("-e", `POTATONETWORK_PROFILE_COUNTRY=${input.country}`);
-    args.push("-e", `POTATONETWORK_PROFILE_TIER=${input.tier ?? "typical"}`);
+    containerEnv.POTATONETWORK_PROFILE_COUNTRY = input.country;
+    containerEnv.POTATONETWORK_PROFILE_TIER = input.tier ?? "typical";
   }
-
   if (env.potatoApiToken) {
-    args.push("-e", `POTATONETWORK_API_TOKEN=${env.potatoApiToken}`);
+    containerEnv.POTATONETWORK_API_TOKEN = env.potatoApiToken;
   }
   if (env.potatoShapeExclude) {
-    args.push("-e", `POTATONETWORK_SHAPE_EXCLUDE=${env.potatoShapeExclude}`);
+    containerEnv.POTATONETWORK_SHAPE_EXCLUDE = env.potatoShapeExclude;
   }
 
-  args.push(env.potatoImage);
-
-  await podman.run(args);
+  await podman.runDetached({
+    name: containerName,
+    image: env.potatoImage,
+    capAdd: ["NET_ADMIN"],
+    binds: [`${env.potatoDataVolume}:/data`],
+    publish: [{ containerPort: 7783, hostIp: "127.0.0.1" }],
+    env: containerEnv,
+  });
 
   const binding = await waitForPort(containerName, 7783);
-  const apiBaseUrl = `http://${binding.host === "0.0.0.0" ? "127.0.0.1" : binding.host}:${binding.port}`;
-
-  return { containerName, apiBaseUrl };
+  const host = binding.host === "0.0.0.0" ? "127.0.0.1" : binding.host;
+  return {
+    containerName,
+    apiBaseUrl: `http://${host}:${binding.port}`,
+  };
 }
 
 async function waitForPort(
@@ -152,8 +137,7 @@ export async function waitPotatoHealthy(
   let attempt = 0;
   while (Date.now() < deadline) {
     heartbeat({ step: "health", attempt: attempt++ });
-    if (await fetchHealth(handle.apiBaseUrl, env.potatoApiToken)) {
-      // CA is created on first boot and served at /v1/ca.pem (also on shared volume)
+    if (await fetchHealth(handle.apiBaseUrl)) {
       if (await fetchCaReady(handle.apiBaseUrl, env.potatoApiToken)) {
         return;
       }
@@ -185,8 +169,8 @@ async function fetchCaReady(
 }
 
 export async function stopPotato(handle: PotatoHandle): Promise<void> {
-  await podman.stop(handle.containerName);
-  await podman.rm(handle.containerName, true);
+  await podman.stopContainer(handle.containerName);
+  await podman.removeContainer(handle.containerName, true);
 }
 
 export async function refreshPotatoCatalog(

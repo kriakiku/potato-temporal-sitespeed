@@ -1,5 +1,6 @@
 import { heartbeat, log } from "@temporalio/activity";
 import { assertExportConfig, getEnv } from "../lib/env";
+import { podman } from "../lib/podman";
 import {
   buildGraphiteNamespace,
   buildResultSlug,
@@ -38,14 +39,13 @@ export async function runSitespeed(
   );
   const slug = buildResultSlug(input.metricPrefix);
 
-  const sitespeedArgs: string[] = [
+  const cmd: string[] = [
     "-b",
     input.browser,
     "-n",
     String(input.iterations),
     "--slug",
     slug,
-    // Trust PotatoNetwork MITM CA (Chrome + Node)
     "--browsertime.chrome.args",
     "ignore-certificate-errors",
     "--browsertime.chrome.args",
@@ -53,45 +53,30 @@ export async function runSitespeed(
   ];
 
   if (env.graphiteHost) {
-    sitespeedArgs.push("--graphite.host", env.graphiteHost);
-    sitespeedArgs.push("--graphite.port", env.graphitePort);
-    sitespeedArgs.push("--graphite.namespace", graphiteNamespace);
-    sitespeedArgs.push("--graphite.addSlugToKey", "true");
+    cmd.push("--graphite.host", env.graphiteHost);
+    cmd.push("--graphite.port", env.graphitePort);
+    cmd.push("--graphite.namespace", graphiteNamespace);
+    cmd.push("--graphite.addSlugToKey", "true");
     if (env.graphiteAuth) {
-      sitespeedArgs.push("--graphite.auth", env.graphiteAuth);
+      cmd.push("--graphite.auth", env.graphiteAuth);
     }
   }
 
   if (env.s3Bucket && env.s3Key && env.s3Secret) {
-    sitespeedArgs.push("--s3.bucketname", env.s3Bucket);
-    sitespeedArgs.push("--s3.key", env.s3Key);
-    sitespeedArgs.push("--s3.secret", env.s3Secret);
-    if (env.s3Endpoint) sitespeedArgs.push("--s3.endpoint", env.s3Endpoint);
-    if (env.s3Region) sitespeedArgs.push("--s3.region", env.s3Region);
+    cmd.push("--s3.bucketname", env.s3Bucket);
+    cmd.push("--s3.key", env.s3Key);
+    cmd.push("--s3.secret", env.s3Secret);
+    if (env.s3Endpoint) cmd.push("--s3.endpoint", env.s3Endpoint);
+    if (env.s3Region) cmd.push("--s3.region", env.s3Region);
     if (env.s3ResultBaseUrl) {
-      sitespeedArgs.push("--resultBaseURL", env.s3ResultBaseUrl);
+      cmd.push("--resultBaseURL", env.s3ResultBaseUrl);
     }
-    sitespeedArgs.push("--s3.removeLocalResult", "true");
+    cmd.push("--s3.removeLocalResult", "true");
   }
 
-  sitespeedArgs.push(input.url);
+  cmd.push(input.url);
 
-  const podmanArgs = [
-    "run",
-    "--rm",
-    "--shm-size",
-    "2g",
-    "--network",
-    `container:${input.potatoContainer}`,
-    "-v",
-    `${env.potatoDataVolume}:/potato-data:ro`,
-    "-e",
-    "NODE_EXTRA_CA_CERTS=/potato-data/ca/potatonetwork-ca.pem",
-    "-e",
-    "SSL_CERT_FILE=/potato-data/ca/potatonetwork-ca.pem",
-    env.sitespeedImage,
-    ...sitespeedArgs,
-  ];
+  const containerName = `sitespeed-${slug}-${Date.now()}`;
 
   log.info("Starting sitespeed.io", {
     potatoContainer: input.potatoContainer,
@@ -102,39 +87,21 @@ export async function runSitespeed(
 
   heartbeat({ step: "sitespeed-start" });
 
-  // Long-running: stream and heartbeat while waiting
-  const proc = Bun.spawn(["podman", ...podmanArgs], {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: process.env,
-  });
-
-  const stdoutChunks: string[] = [];
-  const stderrChunks: string[] = [];
-
-  const readSide = async (
-    stream: ReadableStream<Uint8Array> | null,
-    chunks: string[],
-  ) => {
-    if (!stream) return;
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(decoder.decode(value));
-      heartbeat({ step: "sitespeed-running", bytes: value.byteLength });
-    }
-  };
-
-  await Promise.all([
-    readSide(proc.stdout, stdoutChunks),
-    readSide(proc.stderr, stderrChunks),
-  ]);
-
-  const exitCode = (await proc.exited) ?? 1;
-  const stdout = stdoutChunks.join("");
-  const stderr = stderrChunks.join("");
+  const { exitCode, stdout, stderr } = await podman.runToCompletion(
+    {
+      name: containerName,
+      image: env.sitespeedImage,
+      cmd,
+      networkMode: `container:${input.potatoContainer}`,
+      binds: [`${env.potatoDataVolume}:/potato-data:ro`],
+      env: {
+        NODE_EXTRA_CA_CERTS: "/potato-data/ca/potatonetwork-ca.pem",
+        SSL_CERT_FILE: "/potato-data/ca/potatonetwork-ca.pem",
+      },
+      shmSizeBytes: 2 * 1024 * 1024 * 1024,
+    },
+    () => heartbeat({ step: "sitespeed-running" }),
+  );
 
   if (exitCode !== 0) {
     throw new Error(

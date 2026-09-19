@@ -23,6 +23,7 @@ export type WorkerEnv = {
   sitespeedImage: string;
   demoAuthIdentifier?: string;
   demoAuthPassword?: string;
+  podmanSocket: string;
   s3Endpoint?: string;
   s3Key?: string;
   s3Secret?: string;
@@ -57,6 +58,10 @@ export function getEnv(): WorkerEnv {
     )!,
     demoAuthIdentifier: optional("DEMO_AUTH_IDENTIFIER"),
     demoAuthPassword: optional("DEMO_AUTH_PASSWORD"),
+    podmanSocket: optional(
+      "PODMAN_SOCKET",
+      optional("CONTAINER_HOST", "unix:///run/podman/podman.sock")!,
+    )!,
     s3Endpoint: optional("S3_ENDPOINT"),
     s3Key: optional("S3_KEY"),
     s3Secret: optional("S3_SECRET"),

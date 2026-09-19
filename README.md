@@ -130,6 +130,7 @@ All configuration is via **process environment variables** (no `.env` file).
 | `POTATO_DATA_VOLUME` | `potato-network-data` | Shared Podman volume name |
 | `POTATONETWORK_API_TOKEN` | — | Optional Bearer token |
 | `POTATONETWORK_SHAPE_EXCLUDE` | — | Comma/space CIDRs/IPs that bypass shaping+MITM (S3, Graphite, CDN, …) |
+| `PODMAN_SOCKET` | `/run/podman/podman.sock` | Host Engine API socket (`unix://…` also ok) |
 
 ### sitespeed.io
 
@@ -180,7 +181,7 @@ Image is published to GHCR on every push to `main` (and on `v*` tags):
 ghcr.io/kriakiku/potato-temporal-sitespeed:latest
 ```
 
-The worker needs a **host Podman socket** to start PotatoNetwork / sitespeed sidecars:
+The worker talks to the **host Podman Engine API** over a Unix socket (no `podman` CLI in the image):
 
 ```bash
 podman run --rm -d \
@@ -188,6 +189,8 @@ podman run --rm -d \
   -v /run/podman/podman.sock:/run/podman/podman.sock \
   -e TEMPORAL_ADDRESS=temporal:7233 \
   -e TEMPORAL_TASK_QUEUE=sitespeed \
+  -e DEMO_AUTH_IDENTIFIER=… \
+  -e DEMO_AUTH_PASSWORD=… \
   -e GRAPHITE_HOST=graphite \
   -e S3_BUCKET=… -e S3_KEY=… -e S3_SECRET=… \
   ghcr.io/kriakiku/potato-temporal-sitespeed:latest
