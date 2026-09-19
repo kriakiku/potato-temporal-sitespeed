@@ -106,7 +106,7 @@ All config is process env (no `.env` file).
 | `TEMPORAL_ADDRESS` | `localhost:7233` | |
 | `TEMPORAL_NAMESPACE` | `default` | |
 | `TEMPORAL_TASK_QUEUE` | `sitespeed` | |
-| `POTATO_IMAGE` | `ghcr.io/kriakiku/potato-network:v0.4.0` | |
+| `POTATO_IMAGE` | `ghcr.io/kriakiku/potato-network:latest` | |
 | `POTATO_DATA_VOLUME` | `potato-network-data` | Shared volume name |
 | `POTATO_RULES_EXPR` | — | Absolute **engine-host** path to `rules.expr`; bind-mounted to `/data/rules.expr` (Potato hot-reloads on mtime) |
 | `POTATONETWORK_API_TOKEN` | — | Optional |

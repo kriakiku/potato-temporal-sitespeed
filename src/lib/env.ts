@@ -53,7 +53,7 @@ export function getEnv(): WorkerEnv {
     temporalTaskQueue: optional("TEMPORAL_TASK_QUEUE", "sitespeed")!,
     potatoImage: optional(
       "POTATO_IMAGE",
-      "ghcr.io/kriakiku/potato-network:v0.4.0",
+      "ghcr.io/kriakiku/potato-network:latest",
     )!,
     potatoDataVolume: optional("POTATO_DATA_VOLUME", "potato-network-data")!,
     potatoApiToken: optional("POTATONETWORK_API_TOKEN"),
