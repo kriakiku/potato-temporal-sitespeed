@@ -109,6 +109,72 @@ Example: `lobby-BD-typical-cold-false`
 
 Official sitespeed Grafana dashboards expect a shorter namespace (`base.path.slug`). This layout needs custom panels or Graphite wildcards.
 
+### S3 result URLs for Grafana
+
+sitespeed uploads HTML/screenshots/video under the **slug**, then a timestamp folder. The worker also sets `--copyLatestFilesToBase true` so Grafana can load the **latest** assets without knowing the timestamp.
+
+Set `S3_RESULT_BASE_URL` to the **public HTTP(S) origin** that serves the bucket (CDN or static website) — the same value as the Grafana dashboard variable `resulturl`. Do **not** point it at the S3 API host unless that host is what browsers use.
+
+| Piece | How we set it |
+|-------|----------------|
+| `resulturl` | `S3_RESULT_BASE_URL` (no trailing slash) |
+| `testname` | full slug, e.g. `lobby-BD-typical-cold-false` |
+| `group` | page hostname with `.` → `_` (e.g. `lobby.example.com` → `lobby_example_com`) |
+| `page` | URL path with `/` → `_`; root `/` → `_` |
+| `browser` | workflow `browser` (default `chrome`) |
+| `connectivity` | always `native` (Potato shapes traffic; browsertime `-c native`) |
+| `screenshottype` | `png` (sitespeed default) |
+
+**Latest screenshot / video (Grafana panels):**
+
+```text
+{S3_RESULT_BASE_URL}/{slug}/{group}.{page}.{browser}.{connectivity}.png
+{S3_RESULT_BASE_URL}/{slug}/{group}.{page}.{browser}.{connectivity}.mp4
+```
+
+Example (`tld=example.com`, lobby, BD, typical, cold, not mirror):
+
+```text
+https://results.example.com/lobby-BD-typical-cold-false/lobby_example_com._.chrome.native.png
+```
+
+**Full HTML report for one run** (needs the timestamp folder from the bucket listing or Graphite annotation link):
+
+```text
+{S3_RESULT_BASE_URL}/{slug}/{YYYY-MM-DD-HH-MM-SS}/index.html
+```
+
+Example:
+
+```text
+https://results.example.com/lobby-BD-typical-cold-false/2026-09-19-15-08-30/index.html
+```
+
+**Pick a run via filters:** choose the slug that matches your dimensions:
+
+```text
+{metricPrefix}-{country}-{tier}-{cacheMode}-{isMirror}
+```
+
+| Filter | Slug segment |
+|--------|----------------|
+| product area | `metricPrefix` (`lobby`, `table`, …) |
+| country | `country` (`BD`, `DE`, …) |
+| network tier | `tier` (`stable` / `typical` / `poor`) |
+| cache | `cacheMode` (`cold` / `warm`) |
+| mirror site | `isMirror` (`true` if `tld` ≠ `BASE_TLD`, else `false`) |
+
+Same dimensions appear in the Graphite key before the slug segment when `addSlugToKey` is on.
+
+**Typical 404 causes**
+
+1. Grafana `resulturl` ≠ `S3_RESULT_BASE_URL` (or trailing-slash / `http` vs `https` mismatch).
+2. `testname` is only `lobby` instead of the full slug `lobby-BD-typical-cold-false`.
+3. `connectivity` set to `cable` / `3g` — our runs use `native`.
+4. `group` still has dots (`lobby.example.com`) instead of underscores.
+5. Bucket objects are private and `S3_RESULT_BASE_URL` is not a public/CDN front.
+6. Path-style bucket: if the public URL includes the bucket name, put it in `S3_RESULT_BASE_URL` (e.g. `https://minio.example.com/my-bucket`), not only in `S3_BUCKET`.
+
 ## Environment
 
 All config is process env (no `.env` file).
@@ -128,7 +194,7 @@ All config is process env (no `.env` file).
 | `DEMO_AUTH_IDENTIFIER` | — | Required for tests |
 | `DEMO_AUTH_PASSWORD` | — | Required for tests |
 | `S3_BUCKET` / `S3_KEY` / `S3_SECRET` | — | Upload when all three set |
-| `S3_ENDPOINT` / `S3_REGION` / `S3_RESULT_BASE_URL` | — | Optional; endpoint must include `http://` or `https://` |
+| `S3_ENDPOINT` / `S3_REGION` / `S3_RESULT_BASE_URL` | — | Optional; endpoint must include `http://` or `https://`. `S3_RESULT_BASE_URL` = public origin for HTML/screenshots (Grafana `resulturl`) |
 | `S3_FORCE_PATH_STYLE` | `true` if `S3_ENDPOINT` set, else `false` | Path-style URLs (`endpoint/bucket/…`) instead of `bucket.endpoint` |
 | `GRAPHITE_HOST` | — | Skip Graphite if unset. `127.0.0.1`/`localhost` are rewritten to the host gateway for potato netns |
 | `GRAPHITE_PORT` | `2003` | |

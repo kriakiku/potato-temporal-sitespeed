@@ -259,6 +259,10 @@ export async function runSitespeed(
         await resolveEndpointForPotatoNetns(env.s3ResultBaseUrl),
       );
     }
+    // Copy last screenshot/video/json next to the slug folder root so Grafana
+    // can resolve $resulturl/$testname/$group.$page.$browser.$connectivity.*
+    // without the per-run timestamp directory.
+    cmd.push("--copyLatestFilesToBase", "true");
     cmd.push("--s3.removeLocalResult", "true");
   }
 
