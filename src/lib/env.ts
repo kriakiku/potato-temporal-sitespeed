@@ -51,6 +51,12 @@ export type WorkerEnv = {
    * (bucket.endpoint/…). Defaults to true when S3_ENDPOINT is set.
    */
   s3ForcePathStyle: boolean;
+  /**
+   * Run @sitespeed.io/plugin-lighthouse (plus1 image). Default false: empty
+   * Lighthouse scores (common behind Potato MITM / SPAs) make the Graphite
+   * plugin throw "No data to send" and fail the whole run.
+   */
+  sitespeedLighthouse: boolean;
   graphiteHost?: string;
   graphitePort: string;
   graphiteNamespaceBase: string;
@@ -97,6 +103,7 @@ export function getEnv(): WorkerEnv {
       "S3_FORCE_PATH_STYLE",
       Boolean(optional("S3_ENDPOINT")),
     ),
+    sitespeedLighthouse: optionalBool("SITESPEED_LIGHTHOUSE", false),
     graphiteHost: optional("GRAPHITE_HOST"),
     graphitePort: optional("GRAPHITE_PORT", "2003")!,
     graphiteNamespaceBase: optional("GRAPHITE_NAMESPACE_BASE", "sitespeed")!,

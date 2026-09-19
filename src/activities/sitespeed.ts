@@ -83,6 +83,12 @@ export async function runSitespeed(
     "ignore-certificate-errors-spki-list",
   ];
 
+  // Empty Lighthouse category scores → Graphite plugin rejects the message and
+  // sitespeed exits 1. Opt in with SITESPEED_LIGHTHOUSE=true when LH works.
+  if (!env.sitespeedLighthouse) {
+    cmd.push("--plugins.remove", "@sitespeed.io/plugin-lighthouse");
+  }
+
   if (input.cacheMode === "warm") {
     // Same session: hit URL once to fill cache, then measure
     cmd.push("--preURL", input.url);
