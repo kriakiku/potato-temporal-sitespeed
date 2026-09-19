@@ -170,6 +170,7 @@ podman run --rm -d \
   -e POTATO_RULES_EXPR=/etc/potato/rules.expr \
   -v /etc/potato/rules.expr:/etc/potato/rules.expr:ro \
   -e GRAPHITE_HOST=graphite \
+  -e BASE_TLD=example.com \
   -e S3_BUCKET=… -e S3_KEY=… -e S3_SECRET=… \
   ghcr.io/kriakiku/potato-temporal-sitespeed:latest
 ```
