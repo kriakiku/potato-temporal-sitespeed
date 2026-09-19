@@ -50,6 +50,8 @@ export type WorkerEnv = {
   sitespeedImage: string;
   demoAuthIdentifier?: string;
   demoAuthPassword?: string;
+  /** Base32 TOTP secret; when set, auth/token gets extra.code */
+  demoAuthAuthenticator?: string;
   s3Endpoint?: string;
   s3Key?: string;
   s3Secret?: string;
@@ -120,6 +122,7 @@ export function getEnv(): WorkerEnv {
     sitespeedMaxAttempts: optionalInt("SITESPEED_MAX_ATTEMPTS", 1),
     demoAuthIdentifier: optional("DEMO_AUTH_IDENTIFIER"),
     demoAuthPassword: optional("DEMO_AUTH_PASSWORD"),
+    demoAuthAuthenticator: optional("DEMO_AUTH_AUTHENTICATOR"),
     s3Endpoint: optional("S3_ENDPOINT"),
     s3Key: optional("S3_KEY"),
     s3Secret: optional("S3_SECRET"),

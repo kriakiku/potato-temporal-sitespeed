@@ -1,4 +1,5 @@
-import { required } from "../lib/env";
+import { optional, required } from "../lib/env";
+import { generateTotpCode } from "../lib/totp";
 
 export type ResolveEntryUrlInput = {
   tld: string;
@@ -30,6 +31,12 @@ type EnterTableResponse = {
   frameUrl?: string;
   siteId?: string;
   tableName?: string;
+};
+
+type AuthTokenBody = {
+  password: string;
+  identifier: string;
+  extra?: { code: string };
 };
 
 async function postJson<T>(
@@ -72,18 +79,27 @@ async function postJson<T>(
  * Modes:
  * - no tableId → lobby frameUrl from master-sessions/start
  * - tableId, direct=false → lobby+table frameUrl from master-sessions/start
- * - tableId, direct=true → game frameUrl from lobby enter-table
+ * - tableId, direct=true (default) → game frameUrl from lobby enter-table
+ *
+ * When `DEMO_AUTH_AUTHENTICATOR` is set (base32 TOTP secret), the auth/token
+ * body includes `extra: { code }` from the current authenticator code.
  */
 export async function resolveEntryUrl(
   input: ResolveEntryUrlInput,
 ): Promise<ResolveEntryUrlResult> {
   const identifier = required("DEMO_AUTH_IDENTIFIER");
   const password = required("DEMO_AUTH_PASSWORD");
+  const authenticator = optional("DEMO_AUTH_AUTHENTICATOR");
   const tld = input.tld.replace(/^https?:\/\//, "").replace(/\/$/, "");
+
+  const authBody: AuthTokenBody = { password, identifier };
+  if (authenticator) {
+    authBody.extra = { code: generateTotpCode(authenticator) };
+  }
 
   const auth = await postJson<AuthTokenResponse>(
     `https://demo.${tld}/api/v2/auth/token`,
-    { password, identifier },
+    authBody,
   );
 
   const accessToken = auth.tokenData?.accessToken;

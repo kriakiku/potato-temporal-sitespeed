@@ -121,7 +121,7 @@ Cancel: Temporal workflow cancellation is supported — Potato containers are al
 
 ### Entry URL
 
-1. `POST https://demo.{tld}/api/v2/auth/token`
+1. `POST https://demo.{tld}/api/v2/auth/token` — body `{ password, identifier }` and, when `DEMO_AUTH_AUTHENTICATOR` is set, `extra: { code }` (current TOTP)
 2. `POST https://demo.{tld}/api/go/v1/master-sessions/start` (Bearer)  
    body `{"extend":true}` or `{"tableId":"…","extend":true}`
 3. If `direct=true` **and** `tableId` is set: `POST https://lobby.{tld}/api/v1/enter-table`
@@ -239,6 +239,7 @@ All config is process env (no `.env` file).
 | `SITESPEED_MAX_ATTEMPTS` | `1` | Temporal activity retries for `runSitespeed` only (default **1** = no retry). Injected into the workflow bundle at worker start |
 | `DEMO_AUTH_IDENTIFIER` | — | Required for tests |
 | `DEMO_AUTH_PASSWORD` | — | Required for tests |
+| `DEMO_AUTH_AUTHENTICATOR` | — | Optional base32 TOTP secret; when set, `auth/token` includes `extra: { code }` |
 | `S3_BUCKET` / `S3_KEY` / `S3_SECRET` | — | Upload when all three set |
 | `S3_ENDPOINT` / `S3_REGION` / `S3_RESULT_BASE_URL` | — | Optional; endpoint must include `http://` or `https://`. `S3_REGION` defaults to `us-east-1` for the sitespeed upload. `S3_RESULT_BASE_URL` = public origin (Grafana `resulturl`) |
 | `S3_FORCE_PATH_STYLE` | `true` if `S3_ENDPOINT` set, else `false` | Path-style URLs (`endpoint/bucket/…`) instead of `bucket.endpoint` |
