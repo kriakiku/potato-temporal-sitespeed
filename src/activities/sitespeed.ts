@@ -64,35 +64,45 @@ export function isLighthouseGraphiteEmptyDataFailure(text: string): boolean {
   );
 }
 
-/** Shell-escape for embedding sitespeed args in bash -lc. */
-function shQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
-
 /**
- * Install Potato MITM CA into the sitespeed image trust store (best-effort),
- * then exec sitespeed.io with the given args.
+ * Install Potato MITM CA into the sitespeed image trust stores (best-effort),
+ * then exec the image ENTRYPOINT (/start.sh), which runs sitespeed.js.
+ *
+ * The plus1 image has no `sitespeed.io` on PATH — Docker ENTRYPOINT is /start.sh.
+ * bash -c '…; exec /start.sh "$@"' name -- args… keeps args unquoted safely.
  */
 function sitespeedEntrypointCmd(args: string[]): {
   entrypoint: string[];
   cmd: string[];
 } {
-  const quoted = args.map(shQuote).join(" ");
   const script = [
     "set +e",
-    "if [ -f /potato-data/ca/potatonetwork-ca.pem ]; then",
+    'CA=/potato-data/ca/potatonetwork-ca.pem',
+    'if [ -f "$CA" ]; then',
     "  mkdir -p /usr/local/share/ca-certificates /etc/ssl/certs 2>/dev/null",
-    "  cp /potato-data/ca/potatonetwork-ca.pem /usr/local/share/ca-certificates/potatonetwork.crt 2>/dev/null",
-    "  cp /potato-data/ca/potatonetwork-ca.pem /etc/ssl/certs/potatonetwork.pem 2>/dev/null",
+    '  cp "$CA" /usr/local/share/ca-certificates/potatonetwork.crt 2>/dev/null',
+    '  cp "$CA" /etc/ssl/certs/potatonetwork.pem 2>/dev/null',
     "  command -v update-ca-certificates >/dev/null && update-ca-certificates >/dev/null 2>&1",
+    // Chrome NSS DB (image pre-inits /root/.pki/nssdb; start.sh sets HOME=/tmp)
+    '  if command -v certutil >/dev/null; then',
+    '    for db in /root/.pki/nssdb /tmp/.pki/nssdb; do',
+    '      mkdir -p "$db" 2>/dev/null',
+    '      if [ ! -f "$db/cert9.db" ] && [ ! -f "$db/cert8.db" ]; then',
+    '        certutil -d "sql:$db" -N --empty-password >/dev/null 2>&1',
+    "      fi",
+    '      certutil -d "sql:$db" -D -n potatonetwork >/dev/null 2>&1',
+    '      certutil -d "sql:$db" -A -t "C,," -n potatonetwork -i "$CA" >/dev/null 2>&1',
+    "    done",
+    "  fi",
     "fi",
     "set -e",
-    `exec sitespeed.io ${quoted}`,
+    'exec /start.sh "$@"',
   ].join("\n");
 
   return {
-    entrypoint: ["/bin/bash", "-lc"],
-    cmd: [script],
+    entrypoint: ["/bin/bash", "-c"],
+    // $0 = sitespeed-wrap; "$@" = sitespeed CLI args
+    cmd: [script, "sitespeed-wrap", ...args],
   };
 }
 

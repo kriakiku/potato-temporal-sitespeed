@@ -21,7 +21,7 @@ export type RunContainerOptions = {
   name: string;
   image: string;
   cmd?: string[];
-  /** Override image ENTRYPOINT (e.g. ["/bin/bash","-lc"]). */
+  /** Override image ENTRYPOINT (e.g. ["/bin/bash","-c"]). */
   entrypoint?: string[];
   env?: Record<string, string>;
   capAdd?: string[];
