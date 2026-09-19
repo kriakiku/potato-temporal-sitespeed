@@ -43,6 +43,9 @@ function tail(text: string, max = 4000): string {
   return text.slice(-max);
 }
 
+/** Temporal rejects oversized activity failures; keep messages small. */
+const FAILURE_MESSAGE_MAX = 1500;
+
 /**
  * sitespeed Graphite plugin throws when lighthouse.pageSummary has only null
  * category scores (common for SPAs / MITM). That fails the whole process even
@@ -62,6 +65,44 @@ export function isLighthouseGraphiteEmptyDataFailure(text: string): boolean {
       line.startsWith("Error: No data to send to graphite for message:") ||
       line.startsWith("No data to send to graphite for message:"),
   );
+}
+
+/**
+ * Compact stderr/stdout into a Temporal-safe failure message.
+ * Prefer UrlLoadError / ERROR lines; drop huge JSON blobs (Lighthouse payloads).
+ */
+export function summarizeSitespeedFailure(
+  exitCode: number,
+  combined: string,
+): string {
+  const lines = combined.split(/\r?\n/);
+  const picked: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (
+      /UrlLoadError/i.test(trimmed) ||
+      /\] ERROR:/.test(trimmed) ||
+      /chrome-error:\/\//i.test(trimmed) ||
+      /is the web page down/i.test(trimmed) ||
+      /Failed to load /i.test(trimmed)
+    ) {
+      // Skip multi-line JSON bodies that follow graphite "No data" errors
+      if (trimmed === "{" || trimmed.startsWith('"uuid"')) continue;
+      picked.push(trimmed.slice(0, 400));
+      if (picked.length >= 12) break;
+    }
+  }
+
+  const body =
+    picked.length > 0
+      ? picked.join("\n")
+      : tail(combined.replace(/\s+/g, " ").trim(), 800);
+
+  const msg = `sitespeed.io exited with code ${exitCode}\n${body}`;
+  if (msg.length <= FAILURE_MESSAGE_MAX) return msg;
+  return `${msg.slice(0, FAILURE_MESSAGE_MAX - 1)}…`;
 }
 
 /**
@@ -140,10 +181,21 @@ export async function runSitespeed(
     // plus1 image also ships GPSI; skip external Google PSI
     "--plugins.remove",
     "@sitespeed.io/plugin-gpsi",
+    // Lobby URLs use #masterSessionId=… — SPA mode avoids false nav retries
+    "--spa",
+    // Potato MITM: Chrome error page (chrome-error://chromewebdata/) without these
     "--browsertime.chrome.args",
     "ignore-certificate-errors",
     "--browsertime.chrome.args",
-    "ignore-certificate-errors-spki-list",
+    "allow-insecure-localhost",
+    // Transparent MITM often breaks QUIC; force TCP/TLS the proxy can terminate
+    "--browsertime.chrome.args",
+    "disable-quic",
+    // Shaped + heavy lobby JS: give pageCompleteCheck more room than default 60s
+    "--browsertime.timeouts.pageCompleteCheck",
+    "180000",
+    "--browsertime.timeouts.pageLoad",
+    "300000",
   ];
 
   // Empty Lighthouse category scores → Graphite plugin rejects the message and
@@ -225,9 +277,9 @@ export async function runSitespeed(
       networkMode: `container:${input.potatoContainer}`,
       binds: [`${env.potatoDataVolume}:/potato-data:ro`],
       env: {
+        // Append Potato CA — do NOT set SSL_CERT_FILE (that replaces the
+        // whole trust store and breaks public CA verification).
         NODE_EXTRA_CA_CERTS: "/potato-data/ca/potatonetwork-ca.pem",
-        SSL_CERT_FILE: "/potato-data/ca/potatonetwork-ca.pem",
-        REQUESTS_CA_BUNDLE: "/potato-data/ca/potatonetwork-ca.pem",
       },
       shmSizeBytes: 2 * 1024 * 1024 * 1024,
     },
@@ -242,9 +294,7 @@ export async function runSitespeed(
         { exitCode, slug },
       );
     } else {
-      throw new Error(
-        `sitespeed.io exited with code ${exitCode}\n${tail(stderr) || tail(stdout)}`,
-      );
+      throw new Error(summarizeSitespeedFailure(exitCode, combined));
     }
   }
 
