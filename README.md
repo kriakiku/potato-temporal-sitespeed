@@ -2,7 +2,15 @@
 
 Example of wiring **[potato-network](https://github.com/kriakiku/potato-network)** + **[Temporal](https://temporal.io/)** + **[sitespeed.io](https://www.sitespeed.io/)** together.
 
-A Bun Temporal worker starts a per-run PotatoNetwork sidecar (via Podman/Docker Engine API), runs sitespeed.io through that network namespace, and optionally exports results to S3 / Graphite. Treat this repo as a reference integration, not a product.
+A Bun Temporal worker starts a per-run PotatoNetwork sidecar (via Podman/Docker Engine API), runs sitespeed.io through that network namespace, writes **local JSON/HTML/media**, then the worker:
+
+1. Parses sitespeed JSON (`analysisstorer`)
+2. Enriches with Potato profile / baseline / catalog + DNS/TLS/HTTP/WS stats (+ event timeline)
+3. Burns a **custom video overlay** (ASS + FFmpeg) onto the recorded mp4
+4. Emits **Influx line protocol** to [Telegraf](https://github.com/influxdata/telegraf) (`socket_listener`)
+5. Optionally uploads screenshot/video/HTML to S3 itself
+
+Treat this repo as a reference integration, not a product.
 
 ## Workflows
 
@@ -11,9 +19,10 @@ A Bun Temporal worker starts a per-run PotatoNetwork sidecar (via Podman/Docker 
 1. Resolves an entry URL via demo auth APIs (`demo.{tld}` / optional `lobby.{tld}`) **before** Potato starts (auth is not shaped)
 2. Ensures a shared volume for Potato catalog / baseline / MITM CA
 3. Boots PotatoNetwork with `country` + `tier` from the workflow input (crons off)
-4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` with `--network container:<potato>`
+4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` with `--network container:<potato>`, bind-mounted result dir, `--plugins.add analysisstorer`, `--video`, `--browsertime.videoParams.addTimer false`, browsertime `--script` for first-iframe timing, and a **multi journey** that taps `[data-test-id="fullScreen"]` when present
 5. Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), `--cpu` / `--sustainable.enable` / `--axe.enable`, `cacheMode` cold|warm
-6. Tears down the Potato container
+6. Worker post-process: custom overlay burn-in → Telegraf metrics + optional S3 upload
+7. Tears down the Potato container
 
 ### `potatoRefreshWorkflow`
 
@@ -28,6 +37,8 @@ Use a stable workflow id (`potato-refresh`). Does not recreate the Temporal work
 - [Podman](https://podman.io/) (or Docker) on the worker host
 - Temporal Server (`TEMPORAL_ADDRESS`)
 - Pull access to `ghcr.io/kriakiku/potato-network` and `sitespeedio/sitespeed.io`
+- Optional: Telegraf with `[[inputs.socket_listener]]` (`data_format = "influx"`)
+- Optional: S3-compatible bucket for latest screenshot/video/HTML
 
 > Temporal TypeScript on Bun is **experimental** (SDK ≥ 1.15). Prefer a dedicated task queue.
 
@@ -60,6 +71,16 @@ Optional env: `POTATO_IMAGE`, `SITESPEED_IMAGE`, `E2E_BLACK_THRESHOLD` (default 
 
 Not run in CI (needs Docker + a live session URL).
 
+## E2E: custom video overlay
+
+Burns ASS (WS×6 / API×6 sliding window) onto a synthetic mp4 with FFmpeg from `SITESPEED_IMAGE`. No live URL.
+
+```bash
+bun run e2e:overlay
+```
+
+Optional: `SITESPEED_IMAGE`, `CONTAINER_ENGINE`, `E2E_OUT`. Asserts ASS layout (API at y=264, slot limit 6) and that burn-in replaces the mp4 while keeping `*.raw.mp4`.
+
 ## Quick start
 
 ```bash
@@ -69,6 +90,9 @@ export TEMPORAL_ADDRESS=localhost:7233
 export TEMPORAL_TASK_QUEUE=sitespeed
 export DEMO_AUTH_IDENTIFIER=…
 export DEMO_AUTH_PASSWORD=…
+# Optional metrics / artifacts
+export TELEGRAF_ADDR=udp://127.0.0.1:8094
+export SITESPEED_RESULTS_DIR=/tmp/potato-sitespeed-results
 bun run worker
 ```
 
@@ -107,7 +131,7 @@ Optional local Temporal: `temporal server start-dev`
 
 | Field | Required | Default | Notes |
 |-------|----------|---------|-------|
-| `metricPrefix` | yes | — | Graphite/S3 separator (`lobby`, `table`, …) |
+| `metricPrefix` | yes | — | Separates product areas (`lobby`, `table`, …) — Telegraf tag + S3 prefix segment |
 | `country` | yes | — | Potato boot profile (e.g. `BD`) |
 | `tld` | yes | — | Host for auth/entry URL (e.g. `example.com`) |
 | `tier` | no | `typical` | `stable` \| `typical` \| `poor` |
@@ -127,63 +151,74 @@ Cancel: Temporal workflow cancellation is supported — Potato containers are al
 3. If `direct=true` **and** `tableId` is set: `POST https://lobby.{tld}/api/v1/enter-table`
 4. After the run (success, failure, or cancel): `POST https://demo.{tld}/api/go/v1/master-sessions/bulk-delete` with `{ "masterSessionIds": [msid] }` (re-auth; best-effort)
 
-sitespeed opens the returned `frameUrl`.
+sitespeed opens the returned `frameUrl` (URL is **not** used as a Telegraf tag).
 
-Graphite keys (`--graphite.addSlugToKey false` — no slug segment):
+### Metric identity (no URL in path)
+
+Artifact namespace / S3 prefix:
 
 ```text
-{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}.…
+{ARTIFACT_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}
 ```
 
 Examples:
 
-- Lobby (no `tableId`, `direct` omitted → `true`): `sitespeed.lobby.BD.typical.cold.true.false.pageSummary.…`
-- Blackjack direct: `sitespeed.blackjack.BD.typical.warm.true.false.pageSummary.…`
+- Lobby: `sitespeed.lobby.BD.typical.cold.true.false`
+- Blackjack direct: `sitespeed.blackjack.BD.typical.warm.true.false`
 
-`direct` in the path is the workflow field (`true`/`false`). Without `tableId` it is always **`true`**. With `tableId` and no `direct`, it defaults to **`true`** (enter-table); pass `direct: false` for lobby+table.
+`isMirror` is **derived**: `true` when workflow `tld` ≠ worker `BASE_TLD`. If `BASE_TLD` is unset, always `false`.
 
-`isMirror` is **derived** (not a workflow input): `true` when workflow `tld` ≠ worker `BASE_TLD` (e.g. `BASE_TLD=example.com` + `tld=neo.com` → `true`). If `BASE_TLD` is unset, `isMirror` is always `false`.
+### Telegraf
 
-Official sitespeed Grafana dashboards expect `base.path.slug`. This layout needs custom panels (see filters below).
+Worker emits Influx line protocol to `TELEGRAF_ADDR` (UDP by default). Example Telegraf input:
 
-### Grafana dashboard variables (filters)
-
-Create cascading **Query** variables (Graphite datasource). Refresh on dashboard load.
-
-| Variable | Type | Query / values | Notes |
-|----------|------|----------------|-------|
-| `base` | Constant | `sitespeed` | = `GRAPHITE_NAMESPACE_BASE` |
-| `metricPrefix` | Query | `sitespeed.*` | e.g. `lobby`, `table` |
-| `country` | Query | `sitespeed.$metricPrefix.*` | e.g. `BD`, `DE` |
-| `tier` | Query | `sitespeed.$metricPrefix.$country.*` | `stable` / `typical` / `poor` |
-| `cacheMode` | Query | `sitespeed.$metricPrefix.$country.$tier.*` | `cold` / `warm` |
-| `direct` | Query | `sitespeed.$metricPrefix.$country.$tier.$cacheMode.*` | `true` / `false` |
-| `isMirror` | Query | `sitespeed.$metricPrefix.$country.$tier.$cacheMode.$direct.*` | `true` / `false` |
-| `group` | Custom / Query | e.g. `lobby_example_com` | hostname, `.` → `_` (sitespeed still emits this) |
-| `page` | Custom | usually `lobby` (we set `--urlAlias` = metricPrefix) | or `_` |
-| `browser` | Custom | `chrome` | |
-| `connectivity` | Custom | `native` | always |
-| `resulturl` | Constant | `S3_RESULT_BASE_URL` | no trailing slash |
-| `screenshottype` | Constant | `png` | |
-
-**Panel metric path** (no `testname` / slug):
-
-```text
-$base.$metricPrefix.$country.$tier.$cacheMode.$direct.$isMirror.pageSummary.$group.$page.$browser.$connectivity.…
+```toml
+[[inputs.socket_listener]]
+  service_address = "udp://:8094"
+  data_format = "influx"
 ```
 
-Example:
+Measurements (tags include `metricPrefix`, `country`, `tier`, `cacheMode`, `direct`, `isMirror`, `browser`, `connectivity` — **not** the page URL):
+
+| Measurement | Fields (examples) |
+|-------------|-------------------|
+| `sitespeed_browsertime` | Visual / navigation timings from analysisstorer JSON (includes `firstIframeMs` when the browsertime script fires) |
+| `potato_profile` | `delayMs`, Mbps, `lossPercent`, `cfRttMs`, `hostCfRttMs`, … |
+| `potato_dns` | per-`domain`: `count`, `errorCount`, `latencyAvgMs`, … |
+| `potato_tls_client` | MITM server handshake (includes synthetic last-mile sleep) |
+| `potato_tls_upstream` | Origin TLS handshake (real path) |
+| `potato_http` | per `host`+`method`+`path` (query stripped; workflow apex → `{tld}`): TTFB |
+| `potato_http_duplicate` | same tags when `count > 1` (`extraCount` = duplicates beyond the first) |
+| `potato_websocket` | per `host`+`path`: `started` (upgrade attempts), first-frame latency |
+| `potato_http_slow` | top-5 longest HTTP start→response from Potato MITM (`rank` 1–5, scrubbed `host`/`method`/`path`, `durationMs`, `failed`) — metrics only, not on video |
+| `potato_overlay` | `wsMarkers` / `apiMarkers` counts, `wsShown`/`apiShown` (≤6), `firstIframeMs`, `burned` |
+
+Host tags replace the workflow `tld` apex with `{tld}` (e.g. `api.example.com` → `api.{tld}`). Query strings never appear in tags.
+
+### Custom video overlay
+
+Browsertime’s built-in timer overlay is **off** (`--browsertime.videoParams.addTimer false`). After the run the worker:
+
+1. Reads Potato `GET /v1/stats` **events** (`http_start` / `ws_start` with `atUnixMs`)
+2. Anchors video t=0 to the earliest HTTP start whose host matches the measured page host (offsets clamp ≥ 0)
+3. Takes first-iframe ms from the browsertime script (`performance.now()` / Resource Timing — already nav-relative)
+4. Builds an ASS subtitle (running `t`, `nav`, `iframe`, sliding last **6** WS + last **6** non-static API lines) and burns it with FFmpeg from the sitespeed image
+5. Keeps a `*.raw.mp4` copy beside the replaced `chrome.native.mp4` (S3 still uploads the overlaid file)
+
+API markers skip static extensions (`.js`, `.css`, images, fonts, …). Labels use the same `{tld}` / no-query scrubbing as Telegraf tags.
+
+### Fullscreen tap
+
+Each run stages a browsertime **multi journey** (`bt-measure-journey.js`) that navigates the entry URL under `commands.measure`, waits up to 60s for `[data-test-id="fullScreen"]` (presence gate only), then **Selenium Actions-taps the viewport center** if the marker appeared (no-op if missing). Warm cache does a pre-navigate inside the same script.
+
+Unset `TELEGRAF_ADDR` → metrics emit is skipped (logged once).
+
+### S3 result URLs (worker upload)
+
+When `S3_BUCKET` + `S3_KEY` + `S3_SECRET` are set, the worker uploads from the local result tree (sitespeed does **not** talk to S3):
 
 ```text
-$base.$metricPrefix.$country.$tier.$cacheMode.$direct.$isMirror.pageSummary.$group.$page.$browser.$connectivity.timings.FirstVisualChange.median
-```
-
-### S3 result URLs for Grafana
-
-sitespeed first uploads to a staging prefix `{slug}/{timestamp}/…` (slug still used only for that temp path). After the run the worker **promotes** clean latest assets to a prefix that matches the Graphite namespace, then **deletes** the timestamp folder:
-
-```text
-{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}/
+{ARTIFACT_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}/
   chrome.native.png
   chrome.native.mp4
   index.html
@@ -191,35 +226,15 @@ sitespeed first uploads to a staging prefix `{slug}/{timestamp}/…` (slug still
 
 Set `S3_RESULT_BASE_URL` to the public HTTP(S) origin for the bucket (Grafana `resulturl`).
 
-**Latest screenshot / video / HTML:**
-
-```text
-{S3_RESULT_BASE_URL}/{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}/{browser}.{connectivity}.png
-{S3_RESULT_BASE_URL}/{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}/{browser}.{connectivity}.mp4
-{S3_RESULT_BASE_URL}/{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}/index.html
-```
-
 Example:
 
 ```text
 https://results.example.com/sitespeed.lobby.BD.typical.cold.true.false/chrome.native.png
 ```
 
-In Grafana:
+### Local result files
 
-```text
-$resulturl/$base.$metricPrefix.$country.$tier.$cacheMode.$direct.$isMirror/$browser.$connectivity.$screenshottype
-```
-
-Hash fragments like `#masterSessionId=…` are no longer left in latest filenames (staging may still contain them briefly before promote).
-
-**Typical 404 causes**
-
-1. Grafana `resulturl` ≠ `S3_RESULT_BASE_URL`.
-2. Old dashboards still use `testname`/slug paths — switch to the dotted namespace prefix above.
-3. `connectivity` set to `cable` / `3g` instead of `native`.
-4. Objects private / no public CDN in front of the bucket.
-5. Path-style public URL must include the bucket name in `S3_RESULT_BASE_URL` when needed.
+Each run writes under `{SITESPEED_RESULTS_DIR}/{slug}-{timestamp}/results/` on the **engine host** (bind-mounted into sitespeed). When the worker runs in a container, mount the same absolute path into the worker so it can read JSON/media after the run.
 
 ## Environment
 
@@ -232,36 +247,29 @@ All config is process env (no `.env` file).
 | `TEMPORAL_TASK_QUEUE` | `sitespeed` | |
 | `POTATO_IMAGE` | `ghcr.io/kriakiku/potato-network:latest` | |
 | `POTATO_DATA_VOLUME` | `potato-network-data` | Shared volume name |
-| `POTATO_RULES_EXPR` | — | Absolute **engine-host** path to `rules.expr`; bind-mounted to `/data/rules.expr` (Potato hot-reloads on mtime) |
+| `POTATO_RULES_EXPR` | — | Absolute **engine-host** path to `rules.expr`; bind-mounted to `/data/rules.expr` |
 | `POTATONETWORK_API_TOKEN` | — | Optional |
-| `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Graphite |
-| `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse available. Worker wraps `/start.sh`, installs Potato MITM CA (system + Chrome NSS), and passes `ignore-certificate-errors` + `disable-quic` (MITM often breaks QUIC → `chrome-error://chromewebdata/`) |
-| `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse. Empty LH→Graphite payloads are soft-warned (do not fail the run) |
-| `SITESPEED_MAX_ATTEMPTS` | `1` | Temporal activity retries for `runSitespeed` only (default **1** = no retry). Injected into the workflow bundle at worker start |
+| `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Telegraf |
+| `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse. Worker installs Potato MITM CA + `ignore-certificate-errors` / `disable-quic` |
+| `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse |
+| `SITESPEED_MAX_ATTEMPTS` | `1` | Temporal activity retries for `runSitespeed` |
+| `SITESPEED_RESULTS_DIR` | `/tmp/potato-sitespeed-results` | Absolute engine-host path for result trees |
+| `TELEGRAF_ADDR` | — | `udp://host:8094` / `tcp://host:8094` / `host:8094`. Skip emit if unset |
+| `ARTIFACT_NAMESPACE_BASE` | `sitespeed` | First segment of S3 prefix (`GRAPHITE_NAMESPACE_BASE` still accepted as alias) |
 | `DEMO_AUTH_IDENTIFIER` | — | Required for tests |
 | `DEMO_AUTH_PASSWORD` | — | Required for tests |
-| `DEMO_AUTH_AUTHENTICATOR` | — | Optional base32 TOTP secret; when set, `auth/token` includes `extra: { code }` |
-| `S3_BUCKET` / `S3_KEY` / `S3_SECRET` | — | Upload when all three set |
-| `S3_ENDPOINT` / `S3_REGION` / `S3_RESULT_BASE_URL` | — | Optional; endpoint must include `http://` or `https://`. `S3_REGION` defaults to `us-east-1` for the sitespeed upload. `S3_RESULT_BASE_URL` = public origin (Grafana `resulturl`) |
-| `S3_FORCE_PATH_STYLE` | `true` if `S3_ENDPOINT` set, else `false` | Path-style URLs (`endpoint/bucket/…`) instead of `bucket.endpoint` |
-| `GRAPHITE_HOST` | — | Skip Graphite if unset. `127.0.0.1`/`localhost` are rewritten to the host gateway for potato netns |
-| `GRAPHITE_PORT` | `2003` | |
-| `GRAPHITE_NAMESPACE_BASE` | `sitespeed` | First segment of Graphite keys |
-| `BASE_TLD` | — | Primary apex domain (e.g. `example.com`). When workflow `tld` differs (e.g. `neo.com`), keys use `isMirror=true`. Unset → always `false` |
-| `GRAPHITE_AUTH` | — | Optional `user:password` |
-| `HOST_GATEWAY` | auto | Host IPv4 as seen from containers; required if loopback Graphite/S3 and auto-detect fails |
+| `DEMO_AUTH_AUTHENTICATOR` | — | Optional base32 TOTP secret |
+| `S3_BUCKET` / `S3_KEY` / `S3_SECRET` | — | Worker upload when all three set |
+| `S3_ENDPOINT` / `S3_REGION` / `S3_RESULT_BASE_URL` | — | Optional; `S3_REGION` defaults to `us-east-1` |
+| `S3_FORCE_PATH_STYLE` | `true` if `S3_ENDPOINT` set | Path-style URLs |
+| `BASE_TLD` | — | Primary apex; differing workflow `tld` → `isMirror=true` |
+| `HOST_GATEWAY` | auto | Host IPv4 for loopback rewrite / shape exclude |
 
-On each Potato start the worker resolves Graphite/S3 hosts to IPv4 and appends them to `POTATONETWORK_SHAPE_EXCLUDE` so result upload is not shaped/MITM’d.
-
-Sitespeed runs in Potato’s netns, so `GRAPHITE_HOST=127.0.0.1` would mean Potato’s own loopback. The worker rewrites loopback Graphite/S3 endpoints to `HOST_GATEWAY` (or auto-detected `host.containers.internal` / Podman bridge gateway) before passing them to sitespeed and into `SHAPE_EXCLUDE`. **Carbon must listen on that address** (e.g. `0.0.0.0:2003`), not only host loopback.
+On each Potato start the worker resolves Telegraf/S3 hosts to IPv4 and appends them to `POTATONETWORK_SHAPE_EXCLUDE` so export endpoints are not shaped/MITM’d.
 
 ### Custom path-delay rules (`POTATO_RULES_EXPR`)
 
-One shared expr file for every PotatoNetwork container this worker starts. Set `POTATO_RULES_EXPR` to an **absolute path on the Podman/Docker host** (the machine that owns the engine socket — not a path only inside the worker container unless that path is the same on the host).
-
-The file is bind-mounted to `/data/rules.expr`. PotatoNetwork **hot-reloads on mtime**, so you can edit the host file while runs are in flight; no worker restart needed. Prefer in-place edits (or overwrite contents) — an atomic rename that replaces the inode can leave a stale mount.
-
-See [PotatoNetwork path rules](https://kriakiku.github.io/potato-network/rules/).
+One shared expr file for every PotatoNetwork container this worker starts. See [PotatoNetwork path rules](https://kriakiku.github.io/potato-network/rules/).
 
 ## Docker
 
@@ -271,19 +279,19 @@ Published to GHCR on push to `main` / `v*` tags:
 ghcr.io/kriakiku/potato-temporal-sitespeed:latest
 ```
 
-Engine socket is auto-detected (Podman first, then Docker): `/run/podman/podman.sock`, `$XDG_RUNTIME_DIR/podman/podman.sock`, `/run/user/$UID/podman/podman.sock`, then `/var/run/docker.sock` / `/run/docker.sock`.
-
 ```bash
 podman run --rm -d \
   --name potato-temporal-sitespeed \
   -v /run/podman/podman.sock:/run/podman/podman.sock \
+  -v /tmp/potato-sitespeed-results:/tmp/potato-sitespeed-results \
   -e TEMPORAL_ADDRESS=temporal:7233 \
   -e TEMPORAL_TASK_QUEUE=sitespeed \
   -e DEMO_AUTH_IDENTIFIER=… \
   -e DEMO_AUTH_PASSWORD=… \
   -e POTATO_RULES_EXPR=/etc/potato/rules.expr \
   -v /etc/potato/rules.expr:/etc/potato/rules.expr:ro \
-  -e GRAPHITE_HOST=graphite \
+  -e TELEGRAF_ADDR=udp://telegraf:8094 \
+  -e SITESPEED_RESULTS_DIR=/tmp/potato-sitespeed-results \
   -e BASE_TLD=example.com \
   -e S3_BUCKET=… -e S3_KEY=… -e S3_SECRET=… \
   ghcr.io/kriakiku/potato-temporal-sitespeed:latest
@@ -306,7 +314,7 @@ src/
   workflows/
   activities/
   shared/
-  lib/
+  lib/          # telegraf, sitespeed-json, s3-latest, …
 .github/workflows/
 Dockerfile
 ```

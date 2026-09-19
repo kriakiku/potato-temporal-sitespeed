@@ -71,6 +71,7 @@ export async function siteSpeedTestWorkflow(
 
       const result = await runSitespeed({
         potatoContainer: potato.containerName,
+        potatoApiBaseUrl: potato.apiBaseUrl,
         url: entry.frameUrl,
         metricPrefix: normalized.metricPrefix,
         country: normalized.country,
@@ -90,7 +91,8 @@ export async function siteSpeedTestWorkflow(
         cacheMode: normalized.cacheMode,
         direct: normalized.direct,
         isMirror: result.isMirror,
-        graphiteNamespace: result.graphiteNamespace,
+        artifactNamespace: result.artifactNamespace,
+        graphiteNamespace: result.artifactNamespace,
         potatoContainer: potato.containerName,
         sitespeedExitCode: result.exitCode,
       };

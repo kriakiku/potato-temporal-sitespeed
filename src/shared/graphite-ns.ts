@@ -1,4 +1,4 @@
-/** Dimensions folded into Graphite namespace and S3/sitespeed slug. */
+/** Dimensions folded into artifact namespace and S3/sitespeed slug. */
 export type MetricDimensions = {
   metricPrefix: string;
   country: string;
@@ -11,16 +11,20 @@ export type MetricDimensions = {
 };
 
 function sanitizeSegment(value: string, fallback: string): string {
-  const cleaned = value.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/^\.+/, "").trim();
+  const cleaned = value
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .replace(/^\.+/, "")
+    .trim();
   return cleaned || fallback;
 }
 
 /**
- * Graphite namespace:
+ * Artifact namespace (S3 prefix / Telegraf tag set identity):
  * `{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}`
  */
-export function buildGraphiteNamespace(dims: MetricDimensions): string {
-  const cleanBase = (dims.base ?? "sitespeed").replace(/\.+$/, "").trim() || "sitespeed";
+export function buildArtifactNamespace(dims: MetricDimensions): string {
+  const cleanBase =
+    (dims.base ?? "sitespeed").replace(/\.+$/, "").trim() || "sitespeed";
   const prefix = sanitizeSegment(dims.metricPrefix, "run");
   const country = sanitizeSegment(dims.country, "XX");
   const tier = sanitizeSegment(dims.tier, "typical");
@@ -30,8 +34,11 @@ export function buildGraphiteNamespace(dims: MetricDimensions): string {
   return `${cleanBase}.${prefix}.${country}.${tier}.${cache}.${direct}.${mirror}`;
 }
 
+/** @deprecated use buildArtifactNamespace */
+export const buildGraphiteNamespace = buildArtifactNamespace;
+
 /**
- * sitespeed --slug / S3 path segment:
+ * sitespeed --slug / local result folder segment:
  * `{metricPrefix}-{country}-{tier}-{cacheMode}-{direct}-{isMirror}`
  */
 export function buildResultSlug(dims: Omit<MetricDimensions, "base">): string {
@@ -61,4 +68,20 @@ export function resolveIsMirror(
     .replace(/\/$/, "")
     .toLowerCase();
   return a !== b;
+}
+
+/** Telegraf tag map from workflow dimensions (no URL). */
+export function metricTagsFromDims(
+  dims: MetricDimensions & { browser?: string; connectivity?: string },
+): Record<string, string> {
+  return {
+    metricPrefix: sanitizeSegment(dims.metricPrefix, "run"),
+    country: sanitizeSegment(dims.country, "XX"),
+    tier: sanitizeSegment(dims.tier, "typical"),
+    cacheMode: sanitizeSegment(dims.cacheMode, "cold"),
+    direct: dims.direct ? "true" : "false",
+    isMirror: dims.isMirror ? "true" : "false",
+    browser: sanitizeSegment(dims.browser ?? "chrome", "chrome"),
+    connectivity: sanitizeSegment(dims.connectivity ?? "native", "native"),
+  };
 }

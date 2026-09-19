@@ -1,14 +1,42 @@
+import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { heartbeat, log } from "@temporalio/activity";
-import { assertExportConfig, getEnv } from "../lib/env";
 import {
-  resolveEndpointForPotatoNetns,
-  resolveHostForPotatoNetns,
-} from "../lib/host-gateway";
-import { promoteSitespeedLatestToNamespace } from "../lib/s3-latest";
+  getPotatoBaseline,
+  getPotatoCatalogCountry,
+  getPotatoProfile,
+  getPotatoStats,
+  type PotatoStatsRequest,
+  type PotatoStatsSnapshot,
+} from "./potato";
+import { assertExportConfig, getEnv } from "../lib/env";
+import { buildMeasureJourneyScript } from "../lib/bt-measure-journey";
+import {
+  scrubHostForMetrics,
+  scrubPathForMetrics,
+} from "../lib/metric-scrub";
+import { burnOverlayOntoVideo, overlayWorkDirFor } from "../lib/overlay-ffmpeg";
+import {
+  buildOverlayTimeline,
+  lastN,
+  OVERLAY_SLOT_LIMIT,
+} from "../lib/overlay-timeline";
+import { uploadLocalSitespeedArtifacts } from "../lib/s3-latest";
 import { podman } from "../lib/podman";
 import {
-  buildGraphiteNamespace,
+  findLocalAsset,
+  loadSitespeedMetricFields,
+  type SitespeedTimingFields,
+} from "../lib/sitespeed-json";
+import {
+  emitTelegraf,
+  type TelegrafPoint,
+} from "../lib/telegraf";
+import {
+  buildArtifactNamespace,
   buildResultSlug,
+  metricTagsFromDims,
   resolveIsMirror,
 } from "../shared/graphite-ns";
 import {
@@ -20,26 +48,40 @@ import type { CacheMode, PotatoTier } from "../shared/types";
 
 export { CHROME_DEVICE_NAME } from "../shared/sitespeed-args";
 
+const CONTAINER_OUTPUT = "/sitespeed.io/results";
+const CONTAINER_FIRST_IFRAME_SCRIPT = "/sitespeed.io/bt-first-iframe.js";
+const CONTAINER_MEASURE_JOURNEY = "/sitespeed.io/bt-measure-journey.js";
+const HOST_FIRST_IFRAME_SCRIPT = fileURLToPath(
+  new URL("../../scripts/bt-first-iframe.js", import.meta.url),
+);
+
 export type RunSitespeedInput = {
   potatoContainer: string;
+  /** Potato API base (host-published :7783) for profile/stats enrichment */
+  potatoApiBaseUrl: string;
   url: string;
   metricPrefix: string;
   country: string;
   tier: PotatoTier;
-  /** Workflow tld — compared to BASE_TLD for isMirror */
+  /** Workflow tld — isMirror + host scrub → `{tld}` in Telegraf tags */
   tld: string;
   browser: string;
   iterations: number;
   cacheMode: CacheMode;
-  /** Folded into Graphite/S3 dimensions */
+  /** Folded into artifact namespace / Telegraf tags */
   direct: boolean;
 };
 
 export type RunSitespeedResult = {
   exitCode: number;
+  /** Dotted prefix for S3 / Grafana (`sitespeed.lobby.BD…`) */
+  artifactNamespace: string;
+  /** @deprecated alias of artifactNamespace */
   graphiteNamespace: string;
   slug: string;
   isMirror: boolean;
+  resultDir: string;
+  s3Keys?: string[];
   stdoutTail: string;
   stderrTail: string;
 };
@@ -51,27 +93,6 @@ function tail(text: string, max = 4000): string {
 
 /** Temporal rejects oversized activity failures; keep messages small. */
 const FAILURE_MESSAGE_MAX = 1500;
-
-/**
- * sitespeed Graphite plugin throws when lighthouse.pageSummary has only null
- * category scores (common for SPAs / MITM). That fails the whole process even
- * if Browsertime + S3 succeeded. Treat that as a soft warning.
- */
-export function isLighthouseGraphiteEmptyDataFailure(text: string): boolean {
-  if (!text.includes("No data to send to graphite for message")) return false;
-  if (!text.includes("lighthouse.pageSummary")) return false;
-
-  const errorHeads = [...text.matchAll(/\] ERROR:\s*(.+)/g)].map((m) =>
-    m[1].trim(),
-  );
-  if (errorHeads.length === 0) return false;
-
-  return errorHeads.every(
-    (line) =>
-      line.startsWith("Error: No data to send to graphite for message:") ||
-      line.startsWith("No data to send to graphite for message:"),
-  );
-}
 
 /**
  * Compact stderr/stdout into a Temporal-safe failure message.
@@ -94,7 +115,6 @@ export function summarizeSitespeedFailure(
       /is the web page down/i.test(trimmed) ||
       /Failed to load /i.test(trimmed)
     ) {
-      // Skip multi-line JSON bodies that follow graphite "No data" errors
       if (trimmed === "{" || trimmed.startsWith('"uuid"')) continue;
       picked.push(trimmed.slice(0, 400));
       if (picked.length >= 12) break;
@@ -111,17 +131,210 @@ export function summarizeSitespeedFailure(
   return `${msg.slice(0, FAILURE_MESSAGE_MAX - 1)}…`;
 }
 
-/**
- * Install Potato MITM CA into the sitespeed image trust stores (best-effort),
- * then exec the image ENTRYPOINT (/start.sh), which runs sitespeed.js.
- *
- * The plus1 image has no `sitespeed.io` on PATH — Docker ENTRYPOINT is /start.sh.
- */
 function sitespeedEntrypointCmd(args: string[]): {
   entrypoint: string[];
   cmd: string[];
 } {
   return sitespeedPotatoEntrypoint(args);
+}
+
+function avgLatency(sumMs: number, count: number): number | undefined {
+  if (count <= 0) return undefined;
+  return sumMs / count;
+}
+
+function scrubDomainTag(domain: string, workflowTld: string): string {
+  return scrubHostForMetrics(domain, workflowTld);
+}
+
+function requestTags(
+  base: Record<string, string>,
+  req: PotatoStatsRequest,
+  workflowTld: string,
+): Record<string, string> {
+  const out: Record<string, string> = {
+    ...base,
+    host: scrubHostForMetrics(req.host, workflowTld),
+    path: scrubPathForMetrics(req.path),
+  };
+  if (req.method) out.method = req.method.toUpperCase();
+  return out;
+}
+
+function latencyFields(
+  req: PotatoStatsRequest,
+): Record<string, number | undefined> {
+  return {
+    count: req.count,
+    started: req.started,
+    errorCount: req.errorCount,
+    latencySumMs: req.latencyMs.sumMs,
+    latencyMinMs: req.latencyMs.minMs,
+    latencyMaxMs: req.latencyMs.maxMs,
+    latencyAvgMs: avgLatency(req.latencyMs.sumMs, req.count),
+  };
+}
+
+export function buildTelegrafPoints(input: {
+  tags: Record<string, string>;
+  workflowTld: string;
+  browsertime: SitespeedTimingFields;
+  profile: Awaited<ReturnType<typeof getPotatoProfile>>;
+  baseline: Awaited<ReturnType<typeof getPotatoBaseline>>;
+  catalogCfRtt?: number;
+  catalogNearestAwsRtt?: number;
+  nearestAws?: string;
+  stats: PotatoStatsSnapshot;
+  overlay?: {
+    wsMarkers: number;
+    apiMarkers: number;
+    wsShown: number;
+    apiShown: number;
+    firstIframeMs: number;
+    burned: boolean;
+  };
+}): TelegrafPoint[] {
+  const points: TelegrafPoint[] = [];
+  const { tags, workflowTld } = input;
+
+  if (Object.keys(input.browsertime).length) {
+    points.push({
+      measurement: "sitespeed_browsertime",
+      tags,
+      fields: input.browsertime,
+    });
+  }
+
+  const profileFields: Record<string, number | boolean | undefined> = {
+    delayMs: input.profile.delayMs,
+    downloadMbps: input.profile.downloadMbps,
+    uploadMbps: input.profile.uploadMbps,
+    lossPercent: input.profile.lossPercent,
+    emulationLimited: input.profile.emulationLimited ? true : false,
+    passthrough: input.profile.passthrough ? true : false,
+    hostCfRttMs: input.baseline.hostRtt?.cf,
+    cfRttMs: input.catalogCfRtt,
+    nearestAwsRttMs: input.catalogNearestAwsRtt,
+  };
+  points.push({
+    measurement: "potato_profile",
+    tags: {
+      ...tags,
+      ...(input.nearestAws ? { nearestAws: input.nearestAws } : {}),
+    },
+    fields: profileFields,
+  });
+
+  for (const d of input.stats.dns ?? []) {
+    points.push({
+      measurement: "potato_dns",
+      tags: { ...tags, domain: scrubDomainTag(d.domain, workflowTld) },
+      fields: {
+        count: d.count,
+        errorCount: d.errorCount,
+        latencySumMs: d.latencyMs.sumMs,
+        latencyMinMs: d.latencyMs.minMs,
+        latencyMaxMs: d.latencyMs.maxMs,
+        latencyAvgMs: avgLatency(d.latencyMs.sumMs, d.count),
+      },
+    });
+  }
+  for (const d of input.stats.tlsClient ?? []) {
+    points.push({
+      measurement: "potato_tls_client",
+      tags: { ...tags, domain: scrubDomainTag(d.domain, workflowTld) },
+      fields: {
+        count: d.count,
+        errorCount: d.errorCount,
+        latencySumMs: d.latencyMs.sumMs,
+        latencyMinMs: d.latencyMs.minMs,
+        latencyMaxMs: d.latencyMs.maxMs,
+        latencyAvgMs: avgLatency(d.latencyMs.sumMs, d.count),
+      },
+    });
+  }
+  for (const d of input.stats.tlsUpstream ?? []) {
+    points.push({
+      measurement: "potato_tls_upstream",
+      tags: { ...tags, domain: scrubDomainTag(d.domain, workflowTld) },
+      fields: {
+        count: d.count,
+        errorCount: d.errorCount,
+        latencySumMs: d.latencyMs.sumMs,
+        latencyMinMs: d.latencyMs.minMs,
+        latencyMaxMs: d.latencyMs.maxMs,
+        latencyAvgMs: avgLatency(d.latencyMs.sumMs, d.count),
+      },
+    });
+  }
+
+  for (const req of input.stats.http ?? []) {
+    const rtags = requestTags(tags, req, workflowTld);
+    points.push({
+      measurement: "potato_http",
+      tags: rtags,
+      fields: latencyFields(req),
+    });
+    if (req.count > 1) {
+      points.push({
+        measurement: "potato_http_duplicate",
+        tags: rtags,
+        fields: {
+          count: req.count,
+          extraCount: req.count - 1,
+          latencySumMs: req.latencyMs.sumMs,
+          latencyAvgMs: avgLatency(req.latencyMs.sumMs, req.count),
+        },
+      });
+    }
+  }
+
+  for (const req of input.stats.websocket ?? []) {
+    points.push({
+      measurement: "potato_websocket",
+      tags: requestTags(tags, req, workflowTld),
+      fields: {
+        ...latencyFields(req),
+        started: req.started ?? 0,
+      },
+    });
+  }
+
+  const slow = input.stats.slowHTTP ?? [];
+  for (let i = 0; i < slow.length; i++) {
+    const sample = slow[i]!;
+    points.push({
+      measurement: "potato_http_slow",
+      tags: {
+        ...tags,
+        rank: String(i + 1),
+        host: scrubHostForMetrics(sample.host, workflowTld),
+        method: (sample.method || "GET").toUpperCase(),
+        path: scrubPathForMetrics(sample.path),
+      },
+      fields: {
+        durationMs: sample.durationMs,
+        failed: sample.failed ? true : false,
+      },
+    });
+  }
+
+  if (input.overlay) {
+    points.push({
+      measurement: "potato_overlay",
+      tags,
+      fields: {
+        wsMarkers: input.overlay.wsMarkers,
+        apiMarkers: input.overlay.apiMarkers,
+        wsShown: input.overlay.wsShown,
+        apiShown: input.overlay.apiShown,
+        firstIframeMs: input.overlay.firstIframeMs,
+        burned: input.overlay.burned ? true : false,
+      },
+    });
+  }
+
+  return points;
 }
 
 export async function runSitespeed(
@@ -138,10 +351,42 @@ export async function runSitespeed(
     cacheMode: input.cacheMode,
     direct: input.direct,
     isMirror,
-    base: env.graphiteNamespaceBase,
+    base: env.artifactNamespaceBase,
   };
-  const graphiteNamespace = buildGraphiteNamespace(dims);
+  const artifactNamespace = buildArtifactNamespace(dims);
   const slug = buildResultSlug(dims);
+  const tags = metricTagsFromDims({
+    ...dims,
+    browser: input.browser,
+    connectivity: "native",
+  });
+
+  const resultDir = join(
+    env.sitespeedResultsDir,
+    `${slug}-${Date.now()}`,
+  );
+  await mkdir(resultDir, { recursive: true });
+
+  try {
+    await copyFile(
+      HOST_FIRST_IFRAME_SCRIPT,
+      join(resultDir, "bt-first-iframe.js"),
+    );
+    await writeFile(
+      join(resultDir, "bt-measure-journey.js"),
+      buildMeasureJourneyScript({
+        url: input.url,
+        alias: input.metricPrefix,
+        warm: input.cacheMode === "warm",
+      }),
+      "utf8",
+    );
+  } catch (err) {
+    log.warn("Failed to stage browsertime scripts", {
+      err: err instanceof Error ? err.message : String(err),
+      src: HOST_FIRST_IFRAME_SCRIPT,
+    });
+  }
 
   const cmd = buildSitespeedBrowserArgs({
     browser: input.browser,
@@ -150,65 +395,21 @@ export async function runSitespeed(
     metricPrefix: input.metricPrefix,
     cacheMode: input.cacheMode,
     url: input.url,
+    outputFolder: CONTAINER_OUTPUT,
+    scriptPath: CONTAINER_FIRST_IFRAME_SCRIPT,
+    multiScriptPath: CONTAINER_MEASURE_JOURNEY,
     removeLighthouse: !env.sitespeedLighthouse,
     removeGpsi: true,
   });
-
-  // Strip trailing URL so we can insert Graphite/S3 flags before it
-  const measuredUrl = cmd.pop()!;
-
-  if (env.graphiteHost) {
-    const graphiteHost = await resolveHostForPotatoNetns(env.graphiteHost);
-    if (graphiteHost !== env.graphiteHost) {
-      log.info("Rewrote loopback GRAPHITE_HOST for potato netns", {
-        from: env.graphiteHost,
-        to: graphiteHost,
-      });
-    }
-    cmd.push("--graphite.host", graphiteHost);
-    cmd.push("--graphite.port", env.graphitePort);
-    cmd.push("--graphite.namespace", graphiteNamespace);
-    // Dimensions already live in the namespace; omit redundant slug segment
-    cmd.push("--graphite.addSlugToKey", "false");
-    if (env.graphiteAuth) {
-      cmd.push("--graphite.auth", env.graphiteAuth);
-    }
-  }
-
-  if (env.s3Bucket && env.s3Key && env.s3Secret) {
-    cmd.push("--s3.bucketname", env.s3Bucket);
-    cmd.push("--s3.key", env.s3Key);
-    cmd.push("--s3.secret", env.s3Secret);
-    // sitespeed S3 plugin requires region (us-east-1 is fine for MinIO/custom)
-    cmd.push("--s3.region", env.s3Region || "us-east-1");
-    if (env.s3Endpoint) {
-      cmd.push(
-        "--s3.endpoint",
-        await resolveEndpointForPotatoNetns(env.s3Endpoint),
-      );
-    }
-    if (env.s3ForcePathStyle) {
-      cmd.push("--s3.options.forcePathStyle", "true");
-    }
-    if (env.s3ResultBaseUrl) {
-      cmd.push(
-        "--resultBaseURL",
-        await resolveEndpointForPotatoNetns(env.s3ResultBaseUrl),
-      );
-    }
-    // Do not use copyLatestFilesToBase — worker promotes clean files after upload
-    cmd.push("--s3.removeLocalResult", "true");
-  }
-
-  cmd.push(measuredUrl);
 
   const containerName = `sitespeed-${slug}-${Date.now()}`;
 
   log.info("Starting sitespeed.io", {
     potatoContainer: input.potatoContainer,
     url: input.url,
-    graphiteNamespace,
+    artifactNamespace,
     slug,
+    resultDir,
     cacheMode: input.cacheMode,
     country: input.country,
     tier: input.tier,
@@ -222,6 +423,8 @@ export async function runSitespeed(
 
   const { entrypoint, cmd: wrappedCmd } = sitespeedEntrypointCmd(cmd);
 
+  // Host path resultDir is bind-mounted at /sitespeed.io so --outputFolder
+  // /sitespeed.io/results lands in resultDir/results on the host.
   const { exitCode, stdout, stderr } = await podman.runToCompletion(
     {
       name: containerName,
@@ -229,10 +432,11 @@ export async function runSitespeed(
       entrypoint,
       cmd: wrappedCmd,
       networkMode: `container:${input.potatoContainer}`,
-      binds: [`${env.potatoDataVolume}:/potato-data:ro`],
+      binds: [
+        `${env.potatoDataVolume}:/potato-data:ro`,
+        `${resultDir}:/sitespeed.io`,
+      ],
       env: {
-        // Append Potato CA — do NOT set SSL_CERT_FILE (that replaces the
-        // whole trust store and breaks public CA verification).
         NODE_EXTRA_CA_CERTS: "/potato-data/ca/potatonetwork-ca.pem",
       },
       shmSizeBytes: 2 * 1024 * 1024 * 1024,
@@ -241,49 +445,168 @@ export async function runSitespeed(
   );
 
   const combined = `${stderr}\n${stdout}`;
-  const softOk = isLighthouseGraphiteEmptyDataFailure(combined);
-
-  if (exitCode !== 0 && !softOk) {
+  if (exitCode !== 0) {
     throw new Error(summarizeSitespeedFailure(exitCode, combined));
   }
 
-  if (softOk && exitCode !== 0) {
-    log.warn(
-      "sitespeed exited non-zero due to empty Lighthouse→Graphite payload; treating as success (Browsertime/S3 may still have completed)",
-      { exitCode, slug },
-    );
+  const hostResultsRoot = join(resultDir, "results");
+
+  heartbeat({ step: "parse-metrics" });
+  let browsertime: SitespeedTimingFields = {};
+  try {
+    browsertime = await loadSitespeedMetricFields(hostResultsRoot);
+  } catch (err) {
+    log.warn("Failed to parse sitespeed JSON", {
+      err: err instanceof Error ? err.message : String(err),
+    });
   }
 
+  heartbeat({ step: "potato-enrichment" });
+  let profile: Awaited<ReturnType<typeof getPotatoProfile>> = {};
+  let baseline: Awaited<ReturnType<typeof getPotatoBaseline>> = {};
+  let stats: PotatoStatsSnapshot = {
+    dns: [],
+    tlsClient: [],
+    tlsUpstream: [],
+    http: [],
+    websocket: [],
+  };
+  let catalogCfRtt: number | undefined;
+  let catalogNearestAwsRtt: number | undefined;
+  let nearestAws: string | undefined;
+  try {
+    [profile, baseline, stats] = await Promise.all([
+      getPotatoProfile(input.potatoApiBaseUrl),
+      getPotatoBaseline(input.potatoApiBaseUrl),
+      getPotatoStats(input.potatoApiBaseUrl),
+    ]);
+    const country = await getPotatoCatalogCountry(
+      input.potatoApiBaseUrl,
+      input.country,
+    );
+    nearestAws = country?.nearestAws;
+    const tier = country?.tiers?.[input.tier];
+    catalogCfRtt = tier?.rttToDest?.cf;
+    if (nearestAws && tier?.rttToDest) {
+      catalogNearestAwsRtt = tier.rttToDest[nearestAws];
+    }
+  } catch (err) {
+    log.warn("Potato enrichment failed", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  let overlayMeta: {
+    wsMarkers: number;
+    apiMarkers: number;
+    wsShown: number;
+    apiShown: number;
+    firstIframeMs: number;
+    burned: boolean;
+  } | undefined;
+
+  heartbeat({ step: "video-overlay" });
+  try {
+    const firstIframeMs =
+      typeof browsertime.firstIframeMs === "number"
+        ? browsertime.firstIframeMs
+        : undefined;
+    const timeline = buildOverlayTimeline({
+      events: stats.events ?? [],
+      pageUrl: input.url,
+      workflowTld: input.tld,
+      firstIframeMs,
+    });
+    overlayMeta = {
+      wsMarkers: timeline.ws.length,
+      apiMarkers: timeline.api.length,
+      wsShown: lastN(timeline.ws, OVERLAY_SLOT_LIMIT).length,
+      apiShown: lastN(timeline.api, OVERLAY_SLOT_LIMIT).length,
+      firstIframeMs: timeline.firstIframeMs,
+      burned: false,
+    };
+
+    const mp4 = await findLocalAsset(hostResultsRoot, ".mp4");
+    if (mp4) {
+      await burnOverlayOntoVideo({
+        inputMp4: mp4,
+        workDir: overlayWorkDirFor(mp4),
+        timeline,
+        sitespeedImage: env.sitespeedImage,
+      });
+      overlayMeta.burned = true;
+      log.info("Custom video overlay burned", {
+        mp4,
+        ws: timeline.ws.length,
+        api: timeline.api.length,
+        firstIframeMs: timeline.firstIframeMs,
+      });
+    } else {
+      log.warn("No mp4 found for overlay burn-in", { hostResultsRoot });
+    }
+  } catch (err) {
+    log.warn("Video overlay failed; uploading original if present", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  heartbeat({ step: "telegraf-emit" });
+  try {
+    const points = buildTelegrafPoints({
+      tags,
+      workflowTld: input.tld,
+      browsertime,
+      profile,
+      baseline,
+      catalogCfRtt,
+      catalogNearestAwsRtt,
+      nearestAws,
+      stats,
+      overlay: overlayMeta,
+    });
+    const emit = await emitTelegraf(env.telegrafAddr, points);
+    log.info("Telegraf emit", emit);
+  } catch (err) {
+    log.warn("Telegraf emit failed", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  let s3Keys: string[] | undefined;
   if (env.s3Bucket && env.s3Key && env.s3Secret) {
-    heartbeat({ step: "s3-promote-latest" });
+    heartbeat({ step: "s3-upload" });
     try {
-      const promoted = await promoteSitespeedLatestToNamespace({
+      const uploaded = await uploadLocalSitespeedArtifacts({
+        resultRoot: hostResultsRoot,
         bucket: env.s3Bucket,
         accessKeyId: env.s3Key,
         secretAccessKey: env.s3Secret,
         region: env.s3Region,
         endpoint: env.s3Endpoint,
         forcePathStyle: env.s3ForcePathStyle,
-        uploadSlug: slug,
-        latestPrefix: graphiteNamespace,
+        latestPrefix: artifactNamespace,
         browser: input.browser,
         connectivity: "native",
       });
-      log.info("Promoted clean S3 latest assets", promoted);
+      s3Keys = uploaded.uploaded;
+      log.info("Uploaded local sitespeed artifacts to S3", uploaded);
     } catch (err) {
-      log.warn("S3 latest promote failed", {
+      log.warn("S3 upload failed", {
         err: err instanceof Error ? err.message : String(err),
         slug,
-        graphiteNamespace,
+        artifactNamespace,
       });
     }
   }
 
   return {
     exitCode: 0,
-    graphiteNamespace,
+    artifactNamespace,
+    graphiteNamespace: artifactNamespace,
     slug,
     isMirror,
+    resultDir: hostResultsRoot,
+    s3Keys,
     stdoutTail: tail(stdout),
     stderrTail: tail(stderr),
   };

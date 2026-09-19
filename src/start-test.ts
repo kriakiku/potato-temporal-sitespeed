@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     country,
     tld,
     tableId: arg("tableId"),
-    direct: flag("direct") ? true : arg("tableId") ? false : undefined,
+    direct: flag("direct") ? true : undefined,
     tier: (arg("tier") as SiteSpeedTestInput["tier"]) ?? undefined,
     browser: arg("browser"),
     iterations: arg("iterations") ? Number(arg("iterations")) : undefined,

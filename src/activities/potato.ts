@@ -223,3 +223,110 @@ export async function refreshPotatoBaseline(
 ): Promise<{ hostRtt?: Record<string, number>; probedAt?: string }> {
   return apiFetch(handle.apiBaseUrl, "/v1/baseline/probe", { method: "POST" });
 }
+
+export type PotatoProfile = {
+  country?: string;
+  tier?: string;
+  delayMs?: number;
+  downloadMbps?: number;
+  uploadMbps?: number;
+  lossPercent?: number;
+  passthrough?: boolean;
+  emulationLimited?: boolean;
+  warning?: string;
+};
+
+export type PotatoBaseline = {
+  hostRtt?: Record<string, number>;
+  probedAt?: string;
+};
+
+export type PotatoStatsDomain = {
+  domain: string;
+  count: number;
+  errorCount: number;
+  latencyMs: { sumMs: number; minMs: number; maxMs: number };
+};
+
+export type PotatoStatsRequest = {
+  host: string;
+  method?: string;
+  path: string;
+  count: number;
+  started?: number;
+  errorCount: number;
+  latencyMs: { sumMs: number; minMs: number; maxMs: number };
+};
+
+export type PotatoStatsSnapshot = {
+  dns: PotatoStatsDomain[];
+  tlsClient: PotatoStatsDomain[];
+  tlsUpstream: PotatoStatsDomain[];
+  http?: PotatoStatsRequest[];
+  websocket?: PotatoStatsRequest[];
+  events?: PotatoStatsEvent[];
+  /** Top-N longest HTTP start→response samples (not WS). */
+  slowHTTP?: PotatoHTTPSample[];
+};
+
+export type PotatoStatsEvent = {
+  kind: string;
+  host: string;
+  method?: string;
+  path: string;
+  atUnixMs: number;
+};
+
+export type PotatoHTTPSample = {
+  host: string;
+  method: string;
+  path: string;
+  durationMs: number;
+  failed: boolean;
+  atUnixMs: number;
+};
+
+export type PotatoCatalogCountry = {
+  id: string;
+  nearestAws?: string;
+  tiers?: Record<
+    string,
+    {
+      downloadMbps?: number;
+      uploadMbps?: number;
+      lossPercent?: number;
+      rttToDest?: Record<string, number>;
+    }
+  >;
+};
+
+export async function getPotatoProfile(
+  apiBaseUrl: string,
+): Promise<PotatoProfile> {
+  return apiFetch(apiBaseUrl, "/v1/profile");
+}
+
+export async function getPotatoBaseline(
+  apiBaseUrl: string,
+): Promise<PotatoBaseline> {
+  return apiFetch(apiBaseUrl, "/v1/baseline");
+}
+
+export async function getPotatoStats(
+  apiBaseUrl: string,
+): Promise<PotatoStatsSnapshot> {
+  return apiFetch(apiBaseUrl, "/v1/stats");
+}
+
+export async function getPotatoCatalogCountry(
+  apiBaseUrl: string,
+  countryId: string,
+): Promise<PotatoCatalogCountry | undefined> {
+  const cat = await apiFetch<{ countries?: PotatoCatalogCountry[] }>(
+    apiBaseUrl,
+    "/v1/catalog",
+  );
+  const id = countryId.toUpperCase();
+  return (cat.countries ?? []).find((c) => c.id?.toUpperCase() === id);
+}
+

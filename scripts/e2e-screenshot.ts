@@ -14,8 +14,9 @@
  *   E2E_BLACK_THRESHOLD=0.92
  *   E2E_OUT=.e2e-out
  */
-import { mkdir, rm } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { buildMeasureJourneyScript } from "../src/lib/bt-measure-journey";
 import { buildSitespeedBrowserArgs } from "../src/shared/sitespeed-args";
 import { sitespeedPotatoEntrypoint } from "../src/shared/sitespeed-entrypoint";
 import {
@@ -160,6 +161,16 @@ async function main(): Promise<void> {
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
+  await writeFile(
+    join(outDir, "bt-measure-journey.js"),
+    buildMeasureJourneyScript({
+      url,
+      alias: "e2e",
+      warm: false,
+    }),
+    "utf8",
+  );
+
   const args = buildSitespeedBrowserArgs({
     browser: "chrome",
     iterations: 1,
@@ -167,6 +178,8 @@ async function main(): Promise<void> {
     metricPrefix: "e2e",
     cacheMode: "cold",
     url,
+    outputFolder: "/sitespeed.io/results",
+    multiScriptPath: "/sitespeed.io/bt-measure-journey.js",
     removeLighthouse: true,
     removeGpsi: true,
   });

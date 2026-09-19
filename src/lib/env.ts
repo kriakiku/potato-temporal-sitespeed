@@ -65,25 +65,33 @@ export type WorkerEnv = {
   s3ForcePathStyle: boolean;
   /**
    * Run @sitespeed.io/plugin-lighthouse (plus1 image). Default true.
-   * Set false if empty Lighthouse scores make Graphite throw
-   * "No data to send" and fail the run.
    */
   sitespeedLighthouse: boolean;
   /** Max activity attempts for runSitespeed (default 1). */
   sitespeedMaxAttempts: number;
-  graphiteHost?: string;
-  graphitePort: string;
-  graphiteNamespaceBase: string;
-  graphiteAuth?: string;
+  /**
+   * Absolute path on the engine host for per-run sitespeed result trees.
+   * Must be visible to the worker process (bind-mount the same path when the
+   * worker runs in a container). Default: /tmp/potato-sitespeed-results
+   */
+  sitespeedResultsDir: string;
+  /**
+   * Telegraf socket_listener address for Influx line protocol
+   * (`udp://host:8094`, `tcp://host:8094`, or `host:8094` → UDP).
+   * Unset → skip metric emit.
+   */
+  telegrafAddr?: string;
+  /** First segment of artifact namespace / S3 prefix (was GRAPHITE_NAMESPACE_BASE). */
+  artifactNamespaceBase: string;
   /**
    * Primary apex domain (e.g. example.com). When the workflow `tld` differs
-   * (e.g. neo.com), Graphite/S3 keys get isMirror=true. Unset → always false.
+   * (e.g. neo.com), keys get isMirror=true. Unset → always false.
    */
   baseTld?: string;
   /**
    * IPv4 (or resolvable name) of the engine host as seen from container
-   * networks. Used when GRAPHITE_HOST / S3_ENDPOINT is loopback so sitespeed
-   * inside potato netns can reach host services.
+   * networks. Used when TELEGRAF_ADDR / S3_ENDPOINT is loopback so services
+   * inside potato netns (shape exclude) and worker can reach host listeners.
    */
   hostGateway?: string;
 };
@@ -102,6 +110,10 @@ let cached: WorkerEnv | undefined;
 export function getEnv(): WorkerEnv {
   if (cached) return cached;
 
+  const namespaceBase =
+    optional("ARTIFACT_NAMESPACE_BASE") ??
+    optional("GRAPHITE_NAMESPACE_BASE", "sitespeed")!;
+
   cached = {
     temporalAddress: optional("TEMPORAL_ADDRESS", "localhost:7233")!,
     temporalNamespace: optional("TEMPORAL_NAMESPACE", "default")!,
@@ -118,7 +130,6 @@ export function getEnv(): WorkerEnv {
       "SITESPEED_IMAGE",
       "sitespeedio/sitespeed.io:40.0.0-plus1",
     )!,
-    // Injected into the workflow bundle at worker start (default 1 = no retry).
     sitespeedMaxAttempts: optionalInt("SITESPEED_MAX_ATTEMPTS", 1),
     demoAuthIdentifier: optional("DEMO_AUTH_IDENTIFIER"),
     demoAuthPassword: optional("DEMO_AUTH_PASSWORD"),
@@ -129,16 +140,17 @@ export function getEnv(): WorkerEnv {
     s3Bucket: optional("S3_BUCKET"),
     s3Region: optional("S3_REGION"),
     s3ResultBaseUrl: optional("S3_RESULT_BASE_URL"),
-    // Custom endpoints (MinIO, Ceph, …) usually need path-style addressing
     s3ForcePathStyle: optionalBool(
       "S3_FORCE_PATH_STYLE",
       Boolean(optional("S3_ENDPOINT")),
     ),
     sitespeedLighthouse: optionalBool("SITESPEED_LIGHTHOUSE", true),
-    graphiteHost: optional("GRAPHITE_HOST"),
-    graphitePort: optional("GRAPHITE_PORT", "2003")!,
-    graphiteNamespaceBase: optional("GRAPHITE_NAMESPACE_BASE", "sitespeed")!,
-    graphiteAuth: optional("GRAPHITE_AUTH"),
+    sitespeedResultsDir: optional(
+      "SITESPEED_RESULTS_DIR",
+      "/tmp/potato-sitespeed-results",
+    )!,
+    telegrafAddr: optional("TELEGRAF_ADDR"),
+    artifactNamespaceBase: namespaceBase,
     baseTld: (() => {
       const raw = optional("BASE_TLD");
       return raw ? normalizeHost(raw) : undefined;
@@ -155,6 +167,11 @@ export function assertExportConfig(env: WorkerEnv): void {
   if (s3Any && !(env.s3Key && env.s3Secret && env.s3Bucket)) {
     throw new Error(
       "S3 export requires S3_KEY, S3_SECRET, and S3_BUCKET together",
+    );
+  }
+  if (!env.sitespeedResultsDir.startsWith("/")) {
+    throw new Error(
+      `SITESPEED_RESULTS_DIR must be an absolute path on the engine host (got: ${env.sitespeedResultsDir})`,
     );
   }
 }

@@ -17,6 +17,8 @@ async function main(): Promise<void> {
       potatoImage: env.potatoImage,
       sitespeedImage: env.sitespeedImage,
       sitespeedMaxAttempts: env.sitespeedMaxAttempts,
+      sitespeedResultsDir: env.sitespeedResultsDir,
+      telegrafAddr: env.telegrafAddr ?? null,
       volume: env.potatoDataVolume,
       potatoRulesExpr: env.potatoRulesExpr ?? null,
       hostGateway: env.hostGateway ?? null,

@@ -3,6 +3,7 @@ import { Resolver } from "node:dns/promises";
 import type { WorkerEnv } from "./env";
 import { extractHostname } from "./hostname";
 import { resolveHostForPotatoNetns } from "./host-gateway";
+import { parseTelegrafAddr } from "./telegraf";
 
 export { extractHostname };
 
@@ -27,22 +28,24 @@ function s3Hostnames(env: WorkerEnv): string[] {
   return hosts;
 }
 
-function graphiteHostnames(env: WorkerEnv): string[] {
-  if (!env.graphiteHost) return [];
-  const h = extractHostname(env.graphiteHost);
-  return h ? [h] : [];
+function telegrafHostnames(env: WorkerEnv): string[] {
+  if (!env.telegrafAddr) return [];
+  try {
+    const { host } = parseTelegrafAddr(env.telegrafAddr);
+    return [host];
+  } catch {
+    return [];
+  }
 }
 
 async function resolveHostToIpv4(host: string): Promise<string[]> {
   if (host.includes("/")) {
-    // Already a CIDR
     return [host];
   }
   if (isIP(host) === 4) {
     return [host];
   }
   if (isIP(host) === 6) {
-    // PotatoNetwork SHAPE_EXCLUDE docs are IPv4/CIDR; skip v6
     return [];
   }
   try {
@@ -61,8 +64,7 @@ async function resolveHostToIpv4(host: string): Promise<string[]> {
 
 /**
  * Build POTATONETWORK_SHAPE_EXCLUDE: manual env entries plus resolved
- * IPv4 addresses for Graphite and S3 export endpoints.
- * Loopback Graphite/S3 hosts are rewritten to the host gateway first.
+ * IPv4 addresses for Telegraf and S3 endpoints.
  */
 export async function buildShapeExclude(env: WorkerEnv): Promise<string> {
   const manual = (env.potatoShapeExclude ?? "")
@@ -71,7 +73,7 @@ export async function buildShapeExclude(env: WorkerEnv): Promise<string> {
     .filter(Boolean);
 
   const rawHosts = [
-    ...new Set([...graphiteHostnames(env), ...s3Hostnames(env)]),
+    ...new Set([...telegrafHostnames(env), ...s3Hostnames(env)]),
   ];
 
   const hostnames: string[] = [];

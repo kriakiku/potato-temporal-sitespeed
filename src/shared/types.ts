@@ -6,7 +6,7 @@ export type PotatoTier = "stable" | "typical" | "poor";
 export type CacheMode = "cold" | "warm";
 
 export type SiteSpeedTestInput = {
-  /** Graphite/S3 metric prefix — separates product areas on one domain */
+  /** Separates product areas on one domain (Telegraf tag / S3 prefix) */
   metricPrefix: string;
   /** PotatoNetwork country profile at boot (e.g. "BD", "DE") */
   country: string;
@@ -43,6 +43,9 @@ export type SiteSpeedTestResult = {
   direct: boolean;
   /** Derived: workflow tld !== worker BASE_TLD */
   isMirror: boolean;
+  /** S3 / Grafana prefix (dotted dimensions, no URL) */
+  artifactNamespace: string;
+  /** @deprecated alias of artifactNamespace */
   graphiteNamespace: string;
   potatoContainer: string;
   sitespeedExitCode: number;
