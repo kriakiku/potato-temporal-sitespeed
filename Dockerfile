@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 
-FROM oven/bun:1.2-debian AS deps
+FROM oven/bun:1.4-debian AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 
-FROM oven/bun:1.2-debian
+FROM oven/bun:1.4-debian
 # Podman CLI talks to the host socket (mount /run/podman/podman.sock).
 RUN apt-get update \
   && apt-get install -y --no-install-recommends podman ca-certificates \
