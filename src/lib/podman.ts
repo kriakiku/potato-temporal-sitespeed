@@ -166,6 +166,15 @@ function toCreateOptions(
 }
 
 export const podman = {
+  /** Pull (or refresh) an image tag from the registry. */
+  async pullImage(image: string): Promise<void> {
+    try {
+      await pullImage(image);
+    } catch (err) {
+      throw new PodmanError(`image pull failed: ${image}`, err);
+    }
+  },
+
   async ping(): Promise<void> {
     try {
       await (await engine()).ping();

@@ -14,7 +14,7 @@ export type SiteSpeedTestInput = {
   /** Host used in the entry URL (e.g. example.com) */
   tld: string;
   tableId?: string;
-  /** Only meaningful with tableId; default false when tableId set, true for lobby metrics */
+  /** With tableId: enter-table when true (default true). Without tableId: always true for metrics. */
   direct?: boolean;
   browser?: string;
   iterations?: number;
@@ -52,4 +52,6 @@ export type PotatoRefreshResult = {
   potatoContainer: string;
   catalogOk: boolean;
   baselineProbedAt?: string;
+  /** Images pulled at the start of refresh (POTATO_IMAGE, SITESPEED_IMAGE). */
+  pulledImages: string[];
 };

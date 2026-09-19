@@ -17,7 +17,10 @@ A Bun Temporal worker starts a per-run PotatoNetwork sidecar (via Podman/Docker 
 
 ### `potatoRefreshWorkflow`
 
-Passthrough Potato on the same volume → `POST /v1/catalog/refresh` + `POST /v1/baseline/probe`. Use a stable workflow id (`potato-refresh`).
+1. Pulls configured images (`POTATO_IMAGE`, `SITESPEED_IMAGE`) so floating tags like `:latest` are refreshed
+2. Passthrough Potato on the shared volume → `POST /v1/catalog/refresh` + `POST /v1/baseline/probe`
+
+Use a stable workflow id (`potato-refresh`). Does not recreate the Temporal worker container itself.
 
 ## Requirements
 
@@ -89,7 +92,7 @@ bun run start-test -- \
   --tier typical \
   --tableId t-123 \
   --cacheMode warm
-# add --direct for direct=true (default false when tableId is set)
+# add --direct=false only to force lobby+table when tableId is set (default direct=true)
 ```
 
 Refresh Potato catalog/baseline:
@@ -109,7 +112,7 @@ Optional local Temporal: `temporal server start-dev`
 | `tld` | yes | — | Host for auth/entry URL (e.g. `example.com`) |
 | `tier` | no | `typical` | `stable` \| `typical` \| `poor` |
 | `tableId` | no | — | When set, passed into session / enter-table |
-| `direct` | no | `true` without `tableId` (lobby metrics); `false` if `tableId` set | With `tableId`: `true` → enter-table. Lobby omits it → metrics segment `true` |
+| `direct` | no | `true` | No `tableId` → always `true` (metrics). With `tableId` → `input.direct`, default `true` (enter-table); set `false` for lobby+table |
 | `browser` | no | `chrome` | sitespeed `-b` |
 | `iterations` | no | `3` | sitespeed `-n` |
 | `cacheMode` | no | `cold` | `cold` (clear cache) \| `warm` (`--preURL` then measure) |
@@ -136,7 +139,7 @@ Examples:
 - Lobby (no `tableId`, `direct` omitted → `true`): `sitespeed.lobby.BD.typical.cold.true.false.pageSummary.…`
 - Blackjack direct: `sitespeed.blackjack.BD.typical.warm.true.false.pageSummary.…`
 
-`direct` in the path is the workflow field (`true`/`false`). Lobby runs without a game usually omit it; the metrics segment then defaults to **`true`**. With `tableId` and no `direct`, the segment is **`false`** (lobby+table).
+`direct` in the path is the workflow field (`true`/`false`). Without `tableId` it is always **`true`**. With `tableId` and no `direct`, it defaults to **`true`** (enter-table); pass `direct: false` for lobby+table.
 
 `isMirror` is **derived** (not a workflow input): `true` when workflow `tld` ≠ worker `BASE_TLD` (e.g. `BASE_TLD=example.com` + `tld=neo.com` → `true`). If `BASE_TLD` is unset, `isMirror` is always `false`.
 

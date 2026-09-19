@@ -20,6 +20,7 @@ const {
   refreshPotatoCatalog,
   refreshPotatoBaseline,
   resolveEntryUrl,
+  pullUsedImages,
 } = proxyActivities<typeof activities>({
   startToCloseTimeout: "30 minutes",
   heartbeatTimeout: "2 minutes",
@@ -103,6 +104,7 @@ export async function siteSpeedTestWorkflow(
 export async function potatoRefreshWorkflow(): Promise<PotatoRefreshResult> {
   const { runId } = workflowInfo();
 
+  const pulled = await pullUsedImages();
   await ensurePotatoVolume();
 
   const potato = await startPotato({
@@ -120,6 +122,7 @@ export async function potatoRefreshWorkflow(): Promise<PotatoRefreshResult> {
       potatoContainer: potato.containerName,
       catalogOk: catalog.ok === true,
       baselineProbedAt: baseline.probedAt,
+      pulledImages: pulled.images,
     };
   } finally {
     await CancellationScope.nonCancellable(async () => {
