@@ -2,7 +2,7 @@
 
 export type PotatoTier = "stable" | "typical" | "poor";
 
-/** cold = fresh profile each iteration; warm = preURL warms cache then measure */
+/** cold = clear cache; warm = prior sitespeed run with shared Chrome profile, then measure */
 export type CacheMode = "cold" | "warm";
 
 export type SiteSpeedTestInput = {
@@ -17,7 +17,6 @@ export type SiteSpeedTestInput = {
   /** With tableId: enter-table when true (default true). Without tableId: always true for metrics. */
   direct?: boolean;
   browser?: string;
-  iterations?: number;
   /** Default: cold */
   cacheMode?: CacheMode;
   /**
@@ -35,7 +34,6 @@ export type NormalizedSiteSpeedTestInput = {
   tableId?: string;
   direct: boolean;
   browser: string;
-  iterations: number;
   cacheMode: CacheMode;
   /** Present only when set on input (≥ 1). */
   cpuThrottlingRate?: number;

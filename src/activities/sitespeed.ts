@@ -7,6 +7,7 @@ import {
   getPotatoCatalogCountry,
   getPotatoProfile,
   getPotatoStats,
+  resetPotatoStats,
   type PotatoStatsRequest,
   type PotatoStatsSnapshot,
 } from "./potato";
@@ -16,7 +17,6 @@ import {
   scrubHostForMetrics,
   scrubPathForMetrics,
 } from "../lib/metric-scrub";
-import { burnOverlayOntoVideo, overlayWorkDirFor } from "../lib/overlay-ffmpeg";
 import {
   buildOverlayTimeline,
   lastN,
@@ -25,7 +25,6 @@ import {
 import { uploadLocalSitespeedArtifacts } from "../lib/s3-latest";
 import { podman } from "../lib/podman";
 import {
-  findLocalAsset,
   loadSitespeedMetricFields,
   type SitespeedTimingFields,
 } from "../lib/sitespeed-json";
@@ -42,6 +41,7 @@ import {
 import {
   buildSitespeedBrowserArgs,
   CHROME_DEVICE_NAME,
+  CONTAINER_CHROME_PROFILE,
 } from "../shared/sitespeed-args";
 import { sitespeedPotatoEntrypoint } from "../shared/sitespeed-entrypoint";
 import type { CacheMode, PotatoTier } from "../shared/types";
@@ -66,7 +66,6 @@ export type RunSitespeedInput = {
   /** Workflow tld — isMirror + host scrub → `{tld}` in Telegraf tags */
   tld: string;
   browser: string;
-  iterations: number;
   cacheMode: CacheMode;
   /** Folded into artifact namespace / Telegraf tags */
   direct: boolean;
@@ -382,6 +381,10 @@ export async function runSitespeed(
     `${slug}-${Date.now()}`,
   );
   await mkdir(resultDir, { recursive: true });
+  const chromeProfileDir = join(resultDir, "chrome-profile");
+  if (input.cacheMode === "warm") {
+    await mkdir(chromeProfileDir, { recursive: true });
+  }
 
   try {
     await copyFile(
@@ -393,7 +396,6 @@ export async function runSitespeed(
       buildMeasureJourneyScript({
         url: input.url,
         alias: input.metricPrefix,
-        warm: input.cacheMode === "warm",
       }),
       "utf8",
     );
@@ -404,63 +406,104 @@ export async function runSitespeed(
     });
   }
 
-  const cmd = buildSitespeedBrowserArgs({
-    browser: input.browser,
-    iterations: input.iterations,
-    slug,
-    metricPrefix: input.metricPrefix,
-    cacheMode: input.cacheMode,
-    url: input.url,
-    outputFolder: CONTAINER_OUTPUT,
-    scriptPath: CONTAINER_FIRST_IFRAME_SCRIPT,
-    multiScriptPath: CONTAINER_MEASURE_JOURNEY,
-    removeLighthouse: !env.sitespeedLighthouse,
-    removeGpsi: true,
-    cpuThrottlingRate: input.cpuThrottlingRate,
-  });
+  const runSitespeedContainer = async (opts: {
+    phase: "warmup" | "measure";
+    outputFolder: string;
+    video: boolean;
+    removeLighthouse: boolean;
+    clearCache: boolean;
+    chromeUserDataDir?: string;
+  }): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
+    const cmd = buildSitespeedBrowserArgs({
+      browser: input.browser,
+      slug:
+        opts.phase === "warmup" ? `${slug}-warmup` : slug,
+      metricPrefix: input.metricPrefix,
+      cacheMode: input.cacheMode,
+      url: input.url,
+      outputFolder: opts.outputFolder,
+      scriptPath: CONTAINER_FIRST_IFRAME_SCRIPT,
+      multiScriptPath: CONTAINER_MEASURE_JOURNEY,
+      removeLighthouse: opts.removeLighthouse,
+      removeGpsi: true,
+      cpuThrottlingRate: input.cpuThrottlingRate,
+      chromeUserDataDir: opts.chromeUserDataDir,
+      video: opts.video,
+      clearCache: opts.clearCache,
+    });
 
-  const containerName = `sitespeed-${slug}-${Date.now()}`;
+    const containerName = `sitespeed-${slug}-${opts.phase}-${Date.now()}`;
+    log.info("Starting sitespeed.io", {
+      phase: opts.phase,
+      potatoContainer: input.potatoContainer,
+      url: input.url,
+      artifactNamespace,
+      slug,
+      resultDir,
+      cacheMode: input.cacheMode,
+      cpuThrottlingRate: input.cpuThrottlingRate ?? null,
+      chromeUserDataDir: opts.chromeUserDataDir ?? null,
+      country: input.country,
+      tier: input.tier,
+      isMirror,
+      tld: input.tld,
+      direct: input.direct,
+      deviceName: CHROME_DEVICE_NAME,
+    });
 
-  log.info("Starting sitespeed.io", {
-    potatoContainer: input.potatoContainer,
-    url: input.url,
-    artifactNamespace,
-    slug,
-    resultDir,
-    cacheMode: input.cacheMode,
-    cpuThrottlingRate: input.cpuThrottlingRate ?? null,
-    country: input.country,
-    tier: input.tier,
-    isMirror,
-    tld: input.tld,
-    direct: input.direct,
-    deviceName: CHROME_DEVICE_NAME,
-  });
-
-  heartbeat({ step: "sitespeed-start" });
-
-  const { entrypoint, cmd: wrappedCmd } = sitespeedEntrypointCmd(cmd);
-
-  // Host path resultDir is bind-mounted at /sitespeed.io so --outputFolder
-  // /sitespeed.io/results lands in resultDir/results on the host.
-  const { exitCode, stdout, stderr } = await podman.runToCompletion(
-    {
-      name: containerName,
-      image: env.sitespeedImage,
-      entrypoint,
-      cmd: wrappedCmd,
-      networkMode: `container:${input.potatoContainer}`,
-      binds: [
-        `${env.potatoDataVolume}:/potato-data:ro`,
-        `${resultDir}:/sitespeed.io`,
-      ],
-      env: {
-        NODE_EXTRA_CA_CERTS: "/potato-data/ca/potatonetwork-ca.pem",
+    heartbeat({ step: `sitespeed-${opts.phase}` });
+    const { entrypoint, cmd: wrappedCmd } = sitespeedEntrypointCmd(cmd);
+    return podman.runToCompletion(
+      {
+        name: containerName,
+        image: env.sitespeedImage,
+        entrypoint,
+        cmd: wrappedCmd,
+        networkMode: `container:${input.potatoContainer}`,
+        binds: [
+          `${env.potatoDataVolume}:/potato-data:ro`,
+          `${resultDir}:/sitespeed.io`,
+        ],
+        env: {
+          NODE_EXTRA_CA_CERTS: "/potato-data/ca/potatonetwork-ca.pem",
+        },
+        shmSizeBytes: 2 * 1024 * 1024 * 1024,
       },
-      shmSizeBytes: 2 * 1024 * 1024 * 1024,
-    },
-    () => heartbeat({ step: "sitespeed-running" }),
-  );
+      () => heartbeat({ step: `sitespeed-${opts.phase}-running` }),
+    );
+  };
+
+  if (input.cacheMode === "warm") {
+    const warmup = await runSitespeedContainer({
+      phase: "warmup",
+      outputFolder: "/sitespeed.io/warmup-results",
+      video: false,
+      removeLighthouse: true,
+      clearCache: false,
+      chromeUserDataDir: CONTAINER_CHROME_PROFILE,
+    });
+    if (warmup.exitCode !== 0) {
+      throw new Error(
+        summarizeSitespeedFailure(
+          warmup.exitCode,
+          `${warmup.stderr}\n${warmup.stdout}`,
+        ),
+      );
+    }
+    heartbeat({ step: "potato-stats-reset" });
+    await resetPotatoStats(input.potatoApiBaseUrl);
+    log.info("Potato stats reset after warm cache fill");
+  }
+
+  const { exitCode, stdout, stderr } = await runSitespeedContainer({
+    phase: "measure",
+    outputFolder: CONTAINER_OUTPUT,
+    video: true,
+    removeLighthouse: !env.sitespeedLighthouse,
+    clearCache: input.cacheMode !== "warm",
+    chromeUserDataDir:
+      input.cacheMode === "warm" ? CONTAINER_CHROME_PROFILE : undefined,
+  });
 
   const combined = `${stderr}\n${stdout}`;
   if (exitCode !== 0) {
@@ -523,7 +566,8 @@ export async function runSitespeed(
     burned: boolean;
   } | undefined;
 
-  heartbeat({ step: "video-overlay" });
+  // Event marker counts for metrics only — video uses browsertime's built-in timer.
+  heartbeat({ step: "overlay-metrics" });
   try {
     const firstIframeMs =
       typeof browsertime.firstIframeMs === "number"
@@ -543,27 +587,8 @@ export async function runSitespeed(
       firstIframeMs: timeline.firstIframeMs,
       burned: false,
     };
-
-    const mp4 = await findLocalAsset(hostResultsRoot, ".mp4");
-    if (mp4) {
-      await burnOverlayOntoVideo({
-        inputMp4: mp4,
-        workDir: overlayWorkDirFor(mp4),
-        timeline,
-        sitespeedImage: env.sitespeedImage,
-      });
-      overlayMeta.burned = true;
-      log.info("Custom video overlay burned", {
-        mp4,
-        ws: timeline.ws.length,
-        api: timeline.api.length,
-        firstIframeMs: timeline.firstIframeMs,
-      });
-    } else {
-      log.warn("No mp4 found for overlay burn-in", { hostResultsRoot });
-    }
   } catch (err) {
-    log.warn("Video overlay failed; uploading original if present", {
+    log.warn("Overlay metric extract failed", {
       err: err instanceof Error ? err.message : String(err),
     });
   }

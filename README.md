@@ -6,9 +6,8 @@ A Bun Temporal worker starts a per-run PotatoNetwork sidecar (via Podman/Docker 
 
 1. Parses sitespeed JSON (`analysisstorer`)
 2. Enriches with Potato profile / baseline / catalog + DNS/TLS/HTTP/WS stats (+ event timeline)
-3. Burns a **custom video overlay** (ASS + FFmpeg) onto the recorded mp4
+3. Uploads screenshot/video/HTML optionally to S3; video keeps **browsertime’s built-in timer**
 4. Emits **Influx line protocol** over HTTP to [VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/integrations/datain/) (`/write`) or any Influx-compatible endpoint
-5. Optionally uploads screenshot/video/HTML to S3 itself
 
 Treat this repo as a reference integration, not a product.
 
@@ -19,9 +18,9 @@ Treat this repo as a reference integration, not a product.
 1. Resolves an entry URL via demo auth APIs (`demo.{tld}` / optional `lobby.{tld}`) **before** Potato starts (auth is not shaped)
 2. Ensures a shared volume for Potato catalog / baseline / MITM CA
 3. Boots PotatoNetwork with `country` + `tier` from the workflow input (crons off)
-4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` with `--network container:<potato>`, bind-mounted result dir, `--plugins.add analysisstorer`, `--video`, `--browsertime.videoParams.addTimer false`, browsertime `--script` for first-iframe timing, and a **multi journey** that taps `[data-test-id="fullScreen"]` when present
-5. Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), `--cpu` / `--sustainable.enable` / `--axe.enable`, optional `cpuThrottlingRate` (Chrome CPU slowdown, off when unset), `cacheMode` cold|warm
-6. Worker post-process: custom overlay burn-in → Influx metrics write + optional S3 upload
+4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` once (`-n 1`) with `--network container:<potato>`, bind-mounted result dir, `--plugins.add analysisstorer`, `--video`, `--browsertime.videoParams.addTimer true`, browsertime `--script` for first-iframe timing, and a **multi journey** that taps `[data-test-id="fullScreen"]` when present. For `cacheMode=warm`, runs a lighter warmup sitespeed first (shared Chrome `user-data-dir`), then `POST /v1/stats/reset`, then the measure run
+5. Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), `--cpu` / `--sustainable.enable` / `--axe.enable`, optional `cpuThrottlingRate`, `cacheMode` cold|warm
+6. Worker post-process: Influx metrics write + optional S3 upload (video keeps browsertime timer)
 7. Tears down the Potato container
 
 ### `potatoRefreshWorkflow`
@@ -71,15 +70,15 @@ Optional env: `POTATO_IMAGE`, `SITESPEED_IMAGE`, `E2E_BLACK_THRESHOLD` (default 
 
 Not run in CI (needs Docker + a live session URL).
 
-## E2E: custom video overlay
+## E2E: overlay libs (optional)
 
-Burns ASS (WS×6 / API×6 sliding window) onto a synthetic mp4 with FFmpeg from `SITESPEED_IMAGE`. No live URL.
+Local check of ASS layout helpers + FFmpeg burn (not used by the worker anymore). No live URL.
 
 ```bash
 bun run e2e:overlay
 ```
 
-Optional: `SITESPEED_IMAGE`, `CONTAINER_ENGINE`, `E2E_OUT`. Asserts ASS layout (API at y=264, slot limit 6) and that burn-in replaces the mp4 while keeping `*.raw.mp4`.
+Optional: `SITESPEED_IMAGE`, `CONTAINER_ENGINE`, `E2E_OUT`.
 
 ## Quick start
 
@@ -147,9 +146,20 @@ Optional local Temporal: `temporal server start-dev`
 | `tableId` | no | — | When set, passed into session / enter-table |
 | `direct` | no | `true` | No `tableId` → always `true` (metrics). With `tableId` → `input.direct`, default `true` (enter-table); set `false` for lobby+table |
 | `browser` | no | `chrome` | sitespeed `-b` |
-| `iterations` | no | `3` | sitespeed `-n` |
-| `cacheMode` | no | `cold` | `cold` (clear cache) \| `warm` (`--preURL` then measure) |
+| `cacheMode` | no | `cold` | `cold` (cache clear, one sitespeed) \| `warm` (warmup sitespeed + Potato stats reset + measure with shared Chrome profile) |
 | `cpuThrottlingRate` | no | — | Chrome `CPUThrottlingRate` (integer ≥ 1, e.g. `4`). Unset → no CPU throttling |
+
+Sitespeed always runs with **`-n 1`**. Prefer more frequent Temporal workflows over multiple iterations in one run.
+
+### Warm cache
+
+`cacheMode=warm` does **not** double-navigate inside the journey (that polluted Potato stats). Instead:
+
+1. sitespeed `-n 1` with shared `user-data-dir` under the result dir (no video / no Lighthouse) — fills Chrome HTTP cache  
+2. `POST /v1/stats/reset` on Potato  
+3. sitespeed `-n 1` again with the **same** profile — measure + video; Potato counters cover only this run  
+
+`cacheMode=cold` is a single measure run with `--browsertime.cacheClearRaw`.
 
 Cancel: Temporal workflow cancellation is supported — Potato containers are always stopped in a non-cancellable cleanup (`finally`), including when the run is cancelled mid-sitespeed.
 
@@ -208,25 +218,17 @@ Measurements (tags include `metricPrefix`, `country`, `tier`, `cacheMode`, `dire
 | `potato_websocket` | per `host`+`path`: `started` (upgrade attempts), first-frame latency |
 | `potato_http_slow` | top-5 longest HTTP start→response from Potato MITM (`rank` 1–5, scrubbed `host`/`method`/`path`, `durationMs`, `failed`) — metrics only, not on video |
 | `potato_cf_cache` | per `status` tag: raw `cf-cache-status` (`HIT`, `MISS`, `DYNAMIC`, …) or `NONE` (not Cloudflare); field `count` |
-| `potato_overlay` | `wsMarkers` / `apiMarkers` counts, `wsShown`/`apiShown` (≤6), `firstIframeMs`, `burned` |
+| `potato_overlay` | Event marker counts from Potato stats (`wsMarkers` / `apiMarkers` / shown ≤6, `firstIframeMs`); `burned` always false (no custom ASS) |
 
 Host tags replace the workflow `tld` apex with `{tld}` (e.g. `api.example.com` → `api.{tld}`). Query strings never appear in tags.
 
-### Custom video overlay
+### Video timer
 
-Browsertime’s built-in timer overlay is **off** (`--browsertime.videoParams.addTimer false`). After the run the worker:
-
-1. Reads Potato `GET /v1/stats` **events** (`http_start` / `ws_start` with `atUnixMs`)
-2. Anchors video t=0 to the earliest HTTP start whose host matches the measured page host (offsets clamp ≥ 0)
-3. Takes first-iframe ms from the browsertime script (`performance.now()` / Resource Timing — already nav-relative)
-4. Builds an ASS subtitle (running `t`, `nav`, `iframe`, sliding last **6** WS + last **6** non-static API lines) and burns it with FFmpeg from the sitespeed image
-5. Keeps a `*.raw.mp4` copy beside the replaced `chrome.native.mp4` (S3 still uploads the overlaid file)
-
-API markers skip static extensions (`.js`, `.css`, images, fonts, …). Labels use the same `{tld}` / no-query scrubbing as Influx tags.
+Browsertime’s built-in timer is **on** (`--browsertime.videoParams.addTimer true`). The worker does **not** burn a custom ASS overlay onto the mp4.
 
 ### Fullscreen tap
 
-Each run stages a browsertime **multi journey** (`bt-measure-journey.js`) that navigates the entry URL under `commands.measure`, waits up to 60s for `[data-test-id="fullScreen"]` (presence gate only), then **Selenium Actions-taps the viewport center** if the marker appeared (no-op if missing). Warm cache does a pre-navigate inside the same script.
+Each run stages a browsertime **multi journey** (`bt-measure-journey.js`) that navigates the entry URL under `commands.measure`, waits up to 60s for `[data-test-id="fullScreen"]` (presence gate only), then **Selenium Actions-taps the viewport center** if the marker appeared (no-op if missing). Warm cache is a separate sitespeed pass with a shared Chrome profile (see above), not an in-script pre-navigate.
 
 Unset `INFLUX_WRITE_URL` → metrics emit is skipped (logged once).
 
@@ -262,6 +264,7 @@ All config is process env (no `.env` file).
 | `TEMPORAL_ADDRESS` | `localhost:7233` | Frontend gRPC `host:port` |
 | `TEMPORAL_NAMESPACE` | `default` | |
 | `TEMPORAL_TASK_QUEUE` | `sitespeed` | |
+| `MAX_CONCURRENT_ACTIVITIES` | `1` | Per worker process; Potato/sitespeed runs share this slot with refresh |
 | `TEMPORAL_TLS` | — | `true`/`false`. Unset → TLS on when cert/CA set, else plaintext |
 | `TEMPORAL_TLS_CERT_PATH` | — | Client cert PEM (mTLS; requires `TEMPORAL_TLS_KEY_PATH`) |
 | `TEMPORAL_TLS_KEY_PATH` | — | Client key PEM (mTLS; requires `TEMPORAL_TLS_CERT_PATH`) |
@@ -304,6 +307,8 @@ export TEMPORAL_TLS_SERVER_NAME=temporal.example.com  # optional SNI
 ```
 
 Cert and key must be set together. Same ENV applies to `worker`, `start-test`, and `start-refresh`. Mount cert files into the worker container when running under Podman/Docker.
+
+`MAX_CONCURRENT_ACTIVITIES` (default `1`) caps parallel activities **per worker process**. Two worker replicas on the same queue can still run two sitespeed jobs at once; refresh activities share the same slot.
 
 On each Potato start the worker resolves Influx write / S3 hosts to IPv4 and appends them to `POTATONETWORK_SHAPE_EXCLUDE` so export endpoints are not shaped/MITM’d.
 

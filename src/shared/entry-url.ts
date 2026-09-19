@@ -7,7 +7,6 @@ import type {
 
 const DEFAULT_TIER: PotatoTier = "typical";
 const DEFAULT_BROWSER = "chrome";
-const DEFAULT_ITERATIONS = 3;
 const DEFAULT_CACHE_MODE: CacheMode = "cold";
 
 export function normalizeSiteSpeedInput(
@@ -62,10 +61,6 @@ export function normalizeSiteSpeedInput(
     tableId,
     direct,
     browser: input.browser?.trim() || DEFAULT_BROWSER,
-    iterations:
-      input.iterations && input.iterations > 0
-        ? input.iterations
-        : DEFAULT_ITERATIONS,
     cacheMode,
     cpuThrottlingRate,
   };

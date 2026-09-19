@@ -47,6 +47,10 @@ export type WorkerEnv = {
   temporalNamespace: string;
   temporalTaskQueue: string;
   /**
+   * Max concurrent activity executions on this worker process (default 1).
+   */
+  maxConcurrentActivities: number;
+  /**
    * Force Temporal TLS on/off. Unset → on when certs/CA present, else plaintext.
    */
   temporalTls?: boolean;
@@ -145,6 +149,7 @@ export function getEnv(): WorkerEnv {
     temporalAddress: optional("TEMPORAL_ADDRESS", "localhost:7233")!,
     temporalNamespace: optional("TEMPORAL_NAMESPACE", "default")!,
     temporalTaskQueue: optional("TEMPORAL_TASK_QUEUE", "sitespeed")!,
+    maxConcurrentActivities: optionalInt("MAX_CONCURRENT_ACTIVITIES", 1),
     temporalTls: optionalBoolFlag("TEMPORAL_TLS"),
     temporalTlsCertPath: optional("TEMPORAL_TLS_CERT_PATH"),
     temporalTlsKeyPath: optional("TEMPORAL_TLS_KEY_PATH"),

@@ -2,13 +2,14 @@
  * Generate a browsertime multi/journey script: navigate + measure, then if
  * `[data-test-id="fullScreen"]` is present, Selenium Actions-tap the viewport center.
  * Presence check only — click is not targeted at the element.
+ *
+ * Warm cache is handled outside this script (second sitespeed run with a shared
+ * Chrome user-data-dir after POST /v1/stats/reset).
  */
 export type MeasureJourneyInput = {
   url: string;
   /** Passed to commands.measure.start (urlAlias / result name) */
   alias: string;
-  /** Warm cache: navigate once before measure.start */
-  warm: boolean;
   /** How long to wait for the fullscreen marker (ms) */
   fullscreenWaitMs?: number;
 };
@@ -24,13 +25,8 @@ export function buildMeasureJourneyScript(input: MeasureJourneyInput): string {
 module.exports = async function (context, commands) {
   var url = ${JSON.stringify(input.url)};
   var alias = ${JSON.stringify(input.alias)};
-  var warm = ${input.warm ? "true" : "false"};
   var selector = ${JSON.stringify(FULLSCREEN_SELECTOR)};
   var fullscreenWaitMs = ${waitMs};
-
-  if (warm) {
-    await commands.navigate(url);
-  }
 
   await commands.measure.start(alias);
   await commands.navigate(url);

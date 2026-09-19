@@ -166,14 +166,12 @@ async function main(): Promise<void> {
     buildMeasureJourneyScript({
       url,
       alias: "e2e",
-      warm: false,
     }),
     "utf8",
   );
 
   const args = buildSitespeedBrowserArgs({
     browser: "chrome",
-    iterations: 1,
     slug: "e2e-screenshot",
     metricPrefix: "e2e",
     cacheMode: "cold",

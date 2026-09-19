@@ -78,7 +78,6 @@ export async function siteSpeedTestWorkflow(
         tier: normalized.tier,
         tld: normalized.tld,
         browser: normalized.browser,
-        iterations: normalized.iterations,
         cacheMode: normalized.cacheMode,
         direct: normalized.direct,
         cpuThrottlingRate: normalized.cpuThrottlingRate,

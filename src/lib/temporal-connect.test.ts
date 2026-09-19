@@ -88,6 +88,7 @@ describe("temporalTlsLogFlags", () => {
         temporalAddress: "x:7233",
         temporalNamespace: "default",
         temporalTaskQueue: "sitespeed",
+        maxConcurrentActivities: 1,
         potatoImage: "p",
         potatoDataVolume: "v",
         sitespeedImage: "s",

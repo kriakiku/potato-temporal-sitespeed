@@ -35,7 +35,6 @@ async function main(): Promise<void> {
     direct: flag("direct") ? true : undefined,
     tier: (arg("tier") as SiteSpeedTestInput["tier"]) ?? undefined,
     browser: arg("browser"),
-    iterations: arg("iterations") ? Number(arg("iterations")) : undefined,
     cacheMode: (arg("cacheMode") as SiteSpeedTestInput["cacheMode"]) ?? undefined,
     cpuThrottlingRate: cpuRateRaw !== undefined ? Number(cpuRateRaw) : undefined,
   };

@@ -19,6 +19,7 @@ async function main(): Promise<void> {
       address: env.temporalAddress,
       namespace: env.temporalNamespace,
       taskQueue: env.temporalTaskQueue,
+      maxConcurrentActivities: env.maxConcurrentActivities,
       temporalTls: tlsFlags.temporalTls,
       temporalTlsClientCert: tlsFlags.temporalTlsClientCert,
       temporalTlsCa: tlsFlags.temporalTlsCa,
@@ -47,6 +48,8 @@ async function main(): Promise<void> {
     taskQueue: env.temporalTaskQueue,
     workflowsPath: new URL("./workflows/index.ts", import.meta.url).pathname,
     activities,
+    maxConcurrentActivityTaskExecutions: env.maxConcurrentActivities,
+    maxConcurrentLocalActivityExecutions: env.maxConcurrentActivities,
     bundlerOptions: {
       webpackConfigHook: (config) => {
         config.plugins = [

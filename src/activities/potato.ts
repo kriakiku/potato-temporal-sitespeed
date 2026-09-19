@@ -320,6 +320,10 @@ export async function getPotatoStats(
   return apiFetch(apiBaseUrl, "/v1/stats");
 }
 
+export async function resetPotatoStats(apiBaseUrl: string): Promise<void> {
+  await apiFetch(apiBaseUrl, "/v1/stats/reset", { method: "POST" });
+}
+
 export async function getPotatoCatalogCountry(
   apiBaseUrl: string,
   countryId: string,
