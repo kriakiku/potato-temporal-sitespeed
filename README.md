@@ -94,151 +94,91 @@ Optional local Temporal: `temporal server start-dev`
 
 sitespeed opens the returned `frameUrl`.
 
-Graphite keys:
+Graphite keys (`--graphite.addSlugToKey false` — no slug segment):
 
 ```text
-{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}.*
+{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}.…
 ```
 
-Example: `sitespeed.lobby.BD.typical.cold.false`
-
-S3 / sitespeed slug: `<metricPrefix>-<country>-<tier>-<cacheMode>-<isMirror>`  
-Example: `lobby-BD-typical-cold-false`
+Example: `sitespeed.lobby.BD.typical.cold.false.pageSummary.…`
 
 `isMirror` is **derived** (not a workflow input): `true` when workflow `tld` ≠ worker `BASE_TLD` (e.g. `BASE_TLD=example.com` + `tld=neo.com` → `true`). If `BASE_TLD` is unset, `isMirror` is always `false`.
 
-Official sitespeed Grafana dashboards expect a shorter namespace (`base.path.slug`). This layout needs custom panels or Graphite wildcards.
+Official sitespeed Grafana dashboards expect `base.path.slug`. This layout needs custom panels (see filters below).
 
 ### Grafana dashboard variables (filters)
 
-With `--graphite.addSlugToKey true`, a metric path looks like:
-
-```text
-{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}.{slug}.…
-```
-
-Example:
-
-```text
-sitespeed.lobby.BD.typical.cold.false.lobby-BD-typical-cold-false.pageSummary.…
-```
-
-Create these **Custom / Query** variables on the dashboard (order matters for cascading). Use your Graphite datasource. Set each Query variable to refresh **On dashboard load** (and **On time range change** if you like).
+Create cascading **Query** variables (Graphite datasource). Refresh on dashboard load.
 
 | Variable | Type | Query / values | Notes |
 |----------|------|----------------|-------|
-| `base` | Constant | `sitespeed` | Same as `GRAPHITE_NAMESPACE_BASE` |
+| `base` | Constant | `sitespeed` | = `GRAPHITE_NAMESPACE_BASE` |
 | `metricPrefix` | Query | `sitespeed.*` | e.g. `lobby`, `table` |
 | `country` | Query | `sitespeed.$metricPrefix.*` | e.g. `BD`, `DE` |
 | `tier` | Query | `sitespeed.$metricPrefix.$country.*` | `stable` / `typical` / `poor` |
 | `cacheMode` | Query | `sitespeed.$metricPrefix.$country.$tier.*` | `cold` / `warm` |
 | `isMirror` | Query | `sitespeed.$metricPrefix.$country.$tier.$cacheMode.*` | `true` / `false` |
-| `testname` | Query | `sitespeed.$metricPrefix.$country.$tier.$cacheMode.$isMirror.*` | = slug, e.g. `lobby-BD-typical-cold-false` |
-| `group` | Query | (see below) | hostname, `.` → `_` |
-| `page` | Query | (see below) | path, `/` → `_`; root → `_` |
-| `browser` | Custom | `chrome` | or Query under the path |
-| `connectivity` | Custom | `native` | always `native` for this worker |
-| `resulturl` | Constant | your `S3_RESULT_BASE_URL` | no trailing slash |
+| `group` | Custom / Query | e.g. `lobby_example_com` | hostname, `.` → `_` (sitespeed still emits this) |
+| `page` | Custom | usually `lobby` (we set `--urlAlias` = metricPrefix) | or `_` |
+| `browser` | Custom | `chrome` | |
+| `connectivity` | Custom | `native` | always |
+| `resulturl` | Constant | `S3_RESULT_BASE_URL` | no trailing slash |
 | `screenshottype` | Constant | `png` | |
 
-**`group` / `page` after the slug** (sitespeed URL keys). Exact child names depend on your Graphite layout; start from:
+**Panel metric path** (no `testname` / slug):
 
 ```text
-sitespeed.$metricPrefix.$country.$tier.$cacheMode.$isMirror.$testname.*
-```
-
-Drill until you see segments like `lobby_example_com` (`group`) and `_` (`page` for `/`). You can also set them as **Custom** once you know the values from one successful run.
-
-**Panel / annotation metric prefix** — replace the stock sitespeed pattern `$base.$path.$testname` with:
-
-```text
-$base.$metricPrefix.$country.$tier.$cacheMode.$isMirror.$testname
-```
-
-Example Graphite target:
-
-```text
-$base.$metricPrefix.$country.$tier.$cacheMode.$isMirror.$testname.pageSummary.$group.$page.$browser.$connectivity.timings.FirstVisualChange.median
-```
-
-**S3 “latest” assets** use the same filters:
-
-```text
-$resulturl/$testname/$group.$page.$browser.$connectivity.$screenshottype
-```
-
-**Tips**
-
-- Enable **Multi-value** + **Include All** on `country` / `tier` / `cacheMode` / `isMirror` if you want overlays; use Graphite `*{…}*` or Grafana’s multi-value expansion carefully (All → `*`).
-- Keep `testname` single-value when linking screenshots (one slug → one latest file).
-- If a Query variable is empty, no data has been written under that branch yet — run a matching workflow first.
-- Stock “Page metrics” dashboards from sitespeed assume only `$base.$path.$testname`. Either edit every panel path as above, or fork the JSON once and search-replace.
-
-## Environment
-
-sitespeed uploads HTML/screenshots/video under the **slug**, then a timestamp folder. The worker also sets `--copyLatestFilesToBase true` so Grafana can load the **latest** assets without knowing the timestamp.
-
-Set `S3_RESULT_BASE_URL` to the **public HTTP(S) origin** that serves the bucket (CDN or static website) — the same value as the Grafana dashboard variable `resulturl`. Do **not** point it at the S3 API host unless that host is what browsers use.
-
-| Piece | How we set it |
-|-------|----------------|
-| `resulturl` | `S3_RESULT_BASE_URL` (no trailing slash) |
-| `testname` | full slug, e.g. `lobby-BD-typical-cold-false` |
-| `group` | page hostname with `.` → `_` (e.g. `lobby.example.com` → `lobby_example_com`) |
-| `page` | URL path with `/` → `_`; root `/` → `_` |
-| `browser` | workflow `browser` (default `chrome`) |
-| `connectivity` | always `native` (Potato shapes traffic; browsertime `-c native`) |
-| `screenshottype` | `png` (sitespeed default) |
-
-**Latest screenshot / video (Grafana panels):**
-
-```text
-{S3_RESULT_BASE_URL}/{slug}/{group}.{page}.{browser}.{connectivity}.png
-{S3_RESULT_BASE_URL}/{slug}/{group}.{page}.{browser}.{connectivity}.mp4
-```
-
-Example (`tld=example.com`, lobby, BD, typical, cold, not mirror):
-
-```text
-https://results.example.com/lobby-BD-typical-cold-false/lobby_example_com._.chrome.native.png
-```
-
-**Full HTML report for one run** (needs the timestamp folder from the bucket listing or Graphite annotation link):
-
-```text
-{S3_RESULT_BASE_URL}/{slug}/{YYYY-MM-DD-HH-MM-SS}/index.html
+$base.$metricPrefix.$country.$tier.$cacheMode.$isMirror.pageSummary.$group.$page.$browser.$connectivity.…
 ```
 
 Example:
 
 ```text
-https://results.example.com/lobby-BD-typical-cold-false/2026-09-19-15-08-30/index.html
+$base.$metricPrefix.$country.$tier.$cacheMode.$isMirror.pageSummary.$group.$page.$browser.$connectivity.timings.FirstVisualChange.median
 ```
 
-**Pick a run via filters:** choose the slug that matches your dimensions:
+### S3 result URLs for Grafana
+
+sitespeed first uploads to a staging prefix `{slug}/{timestamp}/…` (slug still used only for that temp path). After the run the worker **promotes** clean latest assets to a prefix that matches the Graphite namespace, then **deletes** the timestamp folder:
 
 ```text
-{metricPrefix}-{country}-{tier}-{cacheMode}-{isMirror}
+{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}/
+  chrome.native.png
+  chrome.native.mp4
+  index.html
 ```
 
-| Filter | Slug segment |
-|--------|----------------|
-| product area | `metricPrefix` (`lobby`, `table`, …) |
-| country | `country` (`BD`, `DE`, …) |
-| network tier | `tier` (`stable` / `typical` / `poor`) |
-| cache | `cacheMode` (`cold` / `warm`) |
-| mirror site | `isMirror` (`true` if `tld` ≠ `BASE_TLD`, else `false`) |
+Set `S3_RESULT_BASE_URL` to the public HTTP(S) origin for the bucket (Grafana `resulturl`).
 
-Same dimensions appear in the Graphite key before the slug segment when `addSlugToKey` is on.
+**Latest screenshot / video / HTML:**
+
+```text
+{S3_RESULT_BASE_URL}/{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}/{browser}.{connectivity}.png
+{S3_RESULT_BASE_URL}/{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}/{browser}.{connectivity}.mp4
+{S3_RESULT_BASE_URL}/{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}/index.html
+```
+
+Example:
+
+```text
+https://results.example.com/sitespeed.lobby.BD.typical.cold.false/chrome.native.png
+```
+
+In Grafana:
+
+```text
+$resulturl/$base.$metricPrefix.$country.$tier.$cacheMode.$isMirror/$browser.$connectivity.$screenshottype
+```
+
+Hash fragments like `#masterSessionId=…` are no longer left in latest filenames (staging may still contain them briefly before promote).
 
 **Typical 404 causes**
 
-1. Grafana `resulturl` ≠ `S3_RESULT_BASE_URL` (or trailing-slash / `http` vs `https` mismatch).
-2. `testname` is only `lobby` instead of the full slug `lobby-BD-typical-cold-false`.
-3. `connectivity` set to `cable` / `3g` — our runs use `native`.
-4. `group` still has dots (`lobby.example.com`) instead of underscores.
-5. Bucket objects are private and `S3_RESULT_BASE_URL` is not a public/CDN front.
-6. Path-style bucket: if the public URL includes the bucket name, put it in `S3_RESULT_BASE_URL` (e.g. `https://minio.example.com/my-bucket`), not only in `S3_BUCKET`.
+1. Grafana `resulturl` ≠ `S3_RESULT_BASE_URL`.
+2. Old dashboards still use `testname`/slug paths — switch to the dotted namespace prefix above.
+3. `connectivity` set to `cable` / `3g` instead of `native`.
+4. Objects private / no public CDN in front of the bucket.
+5. Path-style public URL must include the bucket name in `S3_RESULT_BASE_URL` when needed.
 
 ## Environment
 
@@ -259,7 +199,7 @@ All config is process env (no `.env` file).
 | `DEMO_AUTH_IDENTIFIER` | — | Required for tests |
 | `DEMO_AUTH_PASSWORD` | — | Required for tests |
 | `S3_BUCKET` / `S3_KEY` / `S3_SECRET` | — | Upload when all three set |
-| `S3_ENDPOINT` / `S3_REGION` / `S3_RESULT_BASE_URL` | — | Optional; endpoint must include `http://` or `https://`. `S3_RESULT_BASE_URL` = public origin for HTML/screenshots (Grafana `resulturl`) |
+| `S3_ENDPOINT` / `S3_REGION` / `S3_RESULT_BASE_URL` | — | Optional; endpoint must include `http://` or `https://`. `S3_REGION` defaults to `us-east-1` for the sitespeed upload. `S3_RESULT_BASE_URL` = public origin (Grafana `resulturl`) |
 | `S3_FORCE_PATH_STYLE` | `true` if `S3_ENDPOINT` set, else `false` | Path-style URLs (`endpoint/bucket/…`) instead of `bucket.endpoint` |
 | `GRAPHITE_HOST` | — | Skip Graphite if unset. `127.0.0.1`/`localhost` are rewritten to the host gateway for potato netns |
 | `GRAPHITE_PORT` | `2003` | |

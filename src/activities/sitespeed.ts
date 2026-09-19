@@ -4,6 +4,7 @@ import {
   resolveEndpointForPotatoNetns,
   resolveHostForPotatoNetns,
 } from "../lib/host-gateway";
+import { promoteSitespeedLatestToNamespace } from "../lib/s3-latest";
 import { podman } from "../lib/podman";
 import {
   buildGraphiteNamespace,
@@ -192,8 +193,10 @@ export async function runSitespeed(
     // plus1 image also ships GPSI; skip external Google PSI
     "--plugins.remove",
     "@sitespeed.io/plugin-gpsi",
-    // Lobby URLs use #masterSessionId=… — SPA mode avoids false nav retries
+    // Lobby URLs use #masterSessionId=… — SPA wait without baking hash into names
     "--spa",
+    "--urlAlias",
+    input.metricPrefix,
     // Potato MITM: Chrome error page (chrome-error://chromewebdata/) without these
     "--browsertime.chrome.args",
     "ignore-certificate-errors",
@@ -233,7 +236,8 @@ export async function runSitespeed(
     cmd.push("--graphite.host", graphiteHost);
     cmd.push("--graphite.port", env.graphitePort);
     cmd.push("--graphite.namespace", graphiteNamespace);
-    cmd.push("--graphite.addSlugToKey", "true");
+    // Dimensions already live in the namespace; omit redundant slug segment
+    cmd.push("--graphite.addSlugToKey", "false");
     if (env.graphiteAuth) {
       cmd.push("--graphite.auth", env.graphiteAuth);
     }
@@ -243,13 +247,14 @@ export async function runSitespeed(
     cmd.push("--s3.bucketname", env.s3Bucket);
     cmd.push("--s3.key", env.s3Key);
     cmd.push("--s3.secret", env.s3Secret);
+    // sitespeed S3 plugin requires region (us-east-1 is fine for MinIO/custom)
+    cmd.push("--s3.region", env.s3Region || "us-east-1");
     if (env.s3Endpoint) {
       cmd.push(
         "--s3.endpoint",
         await resolveEndpointForPotatoNetns(env.s3Endpoint),
       );
     }
-    if (env.s3Region) cmd.push("--s3.region", env.s3Region);
     if (env.s3ForcePathStyle) {
       cmd.push("--s3.options.forcePathStyle", "true");
     }
@@ -259,10 +264,7 @@ export async function runSitespeed(
         await resolveEndpointForPotatoNetns(env.s3ResultBaseUrl),
       );
     }
-    // Copy last screenshot/video/json next to the slug folder root so Grafana
-    // can resolve $resulturl/$testname/$group.$page.$browser.$connectivity.*
-    // without the per-run timestamp directory.
-    cmd.push("--copyLatestFilesToBase", "true");
+    // Do not use copyLatestFilesToBase — worker promotes clean files after upload
     cmd.push("--s3.removeLocalResult", "true");
   }
 
@@ -306,14 +308,41 @@ export async function runSitespeed(
   );
 
   const combined = `${stderr}\n${stdout}`;
-  if (exitCode !== 0) {
-    if (isLighthouseGraphiteEmptyDataFailure(combined)) {
-      log.warn(
-        "sitespeed exited non-zero due to empty Lighthouse→Graphite payload; treating as success (Browsertime/S3 may still have completed)",
-        { exitCode, slug },
-      );
-    } else {
-      throw new Error(summarizeSitespeedFailure(exitCode, combined));
+  const softOk = isLighthouseGraphiteEmptyDataFailure(combined);
+
+  if (exitCode !== 0 && !softOk) {
+    throw new Error(summarizeSitespeedFailure(exitCode, combined));
+  }
+
+  if (softOk && exitCode !== 0) {
+    log.warn(
+      "sitespeed exited non-zero due to empty Lighthouse→Graphite payload; treating as success (Browsertime/S3 may still have completed)",
+      { exitCode, slug },
+    );
+  }
+
+  if (env.s3Bucket && env.s3Key && env.s3Secret) {
+    heartbeat({ step: "s3-promote-latest" });
+    try {
+      const promoted = await promoteSitespeedLatestToNamespace({
+        bucket: env.s3Bucket,
+        accessKeyId: env.s3Key,
+        secretAccessKey: env.s3Secret,
+        region: env.s3Region,
+        endpoint: env.s3Endpoint,
+        forcePathStyle: env.s3ForcePathStyle,
+        uploadSlug: slug,
+        latestPrefix: graphiteNamespace,
+        browser: input.browser,
+        connectivity: "native",
+      });
+      log.info("Promoted clean S3 latest assets", promoted);
+    } catch (err) {
+      log.warn("S3 latest promote failed", {
+        err: err instanceof Error ? err.message : String(err),
+        slug,
+        graphiteNamespace,
+      });
     }
   }
 
