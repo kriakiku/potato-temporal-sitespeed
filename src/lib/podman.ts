@@ -1,7 +1,8 @@
 /**
- * Thin helpers around dockerode talking to Podman's Docker-compatible
- * Engine API on a Unix socket (no custom HTTP client).
+ * Thin helpers around dockerode. Auto-detects Engine API socket:
+ * Podman first, then Docker.
  */
+import { existsSync } from "node:fs";
 import Dockerode from "dockerode";
 
 export class PodmanError extends Error {
@@ -34,27 +35,51 @@ export type RunContainerOptions = {
   shmSizeBytes?: number;
 };
 
-function socketPath(): string {
-  const raw =
-    process.env.PODMAN_SOCKET?.trim() ||
-    process.env.CONTAINER_HOST?.trim() ||
-    process.env.DOCKER_HOST?.trim() ||
-    "unix:///run/podman/podman.sock";
+function candidateSockets(): string[] {
+  const uid =
+    typeof process.getuid === "function" ? String(process.getuid()) : undefined;
+  const xdg = process.env.XDG_RUNTIME_DIR?.trim();
 
-  if (raw.startsWith("unix://")) return raw.slice("unix://".length);
-  if (raw.startsWith("/")) return raw;
-  throw new Error(
-    `Unsupported container socket "${raw}" — expected unix:///path/to.sock`,
-  );
+  return [
+    "/run/podman/podman.sock",
+    xdg ? `${xdg}/podman/podman.sock` : undefined,
+    uid ? `/run/user/${uid}/podman/podman.sock` : undefined,
+    "/var/run/docker.sock",
+    "/run/docker.sock",
+  ].filter((p): p is string => Boolean(p));
 }
 
 let client: Dockerode | undefined;
+let resolvedSocket: string | undefined;
 
-function docker(): Dockerode {
-  if (!client) {
-    client = new Dockerode({ socketPath: socketPath() });
+async function engine(): Promise<Dockerode> {
+  if (client) return client;
+
+  const candidates = candidateSockets();
+  const present = candidates.filter((p) => existsSync(p));
+  const errors: string[] = [];
+
+  for (const path of present.length ? present : candidates) {
+    try {
+      const d = new Dockerode({ socketPath: path });
+      await d.ping();
+      client = d;
+      resolvedSocket = path;
+      return client;
+    } catch (err) {
+      errors.push(
+        `${path}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
-  return client;
+
+  throw new PodmanError(
+    `No working Podman/Docker socket found. Tried: ${candidates.join(", ")}. ${errors.join("; ")}`,
+  );
+}
+
+export function detectedSocketPath(): string | undefined {
+  return resolvedSocket;
 }
 
 function splitImage(image: string): { repo: string; tag: string } {
@@ -70,25 +95,33 @@ function splitImage(image: string): { repo: string; tag: string } {
 }
 
 async function pullImage(image: string): Promise<void> {
+  const d = await engine();
   const { repo, tag } = splitImage(image);
   await new Promise<void>((resolve, reject) => {
-    docker().pull(`${repo}:${tag}`, (err: Error | null, stream: NodeJS.ReadableStream) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      docker().modem.followProgress(stream, (err2: Error | null) => {
-        if (err2) reject(err2);
-        else resolve();
-      });
-    });
+    d.pull(
+      `${repo}:${tag}`,
+      (err: Error | null, stream: NodeJS.ReadableStream) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        d.modem.followProgress(stream, (err2: Error | null) => {
+          if (err2) reject(err2);
+          else resolve();
+        });
+      },
+    );
   });
 }
 
-function toCreateOptions(opts: RunContainerOptions): Dockerode.ContainerCreateOptions {
+function toCreateOptions(
+  opts: RunContainerOptions,
+): Dockerode.ContainerCreateOptions {
   const exposed: Record<string, object> = {};
-  const portBindings: Record<string, Array<{ HostIp?: string; HostPort: string }>> =
-    {};
+  const portBindings: Record<
+    string,
+    Array<{ HostIp?: string; HostPort: string }>
+  > = {};
 
   for (const p of opts.publish ?? []) {
     const key = `${p.containerPort}/tcp`;
@@ -121,19 +154,17 @@ function toCreateOptions(opts: RunContainerOptions): Dockerode.ContainerCreateOp
 }
 
 export const podman = {
-  socketPath,
-
   async ping(): Promise<void> {
     try {
-      await docker().ping();
+      await (await engine()).ping();
     } catch (err) {
-      throw new PodmanError("Podman socket ping failed", err);
+      throw new PodmanError("Container engine ping failed", err);
     }
   },
 
   async volumeExists(name: string): Promise<boolean> {
     try {
-      await docker().getVolume(name).inspect();
+      await (await engine()).getVolume(name).inspect();
       return true;
     } catch {
       return false;
@@ -142,7 +173,7 @@ export const podman = {
 
   async volumeCreate(name: string): Promise<void> {
     try {
-      await docker().createVolume({ Name: name });
+      await (await engine()).createVolume({ Name: name });
     } catch (err: unknown) {
       const status =
         err && typeof err === "object" && "statusCode" in err
@@ -155,7 +186,7 @@ export const podman = {
 
   async removeContainer(nameOrId: string, force = true): Promise<void> {
     try {
-      await docker().getContainer(nameOrId).remove({ force, v: true });
+      await (await engine()).getContainer(nameOrId).remove({ force, v: true });
     } catch (err: unknown) {
       const status =
         err && typeof err === "object" && "statusCode" in err
@@ -168,13 +199,12 @@ export const podman = {
 
   async stopContainer(nameOrId: string, timeoutSec = 10): Promise<void> {
     try {
-      await docker().getContainer(nameOrId).stop({ t: timeoutSec });
+      await (await engine()).getContainer(nameOrId).stop({ t: timeoutSec });
     } catch (err: unknown) {
       const status =
         err && typeof err === "object" && "statusCode" in err
           ? (err as { statusCode?: number }).statusCode
           : undefined;
-      // 304 = already stopped, 404 = gone
       if (status === 304 || status === 404) return;
       throw new PodmanError(`container stop failed: ${nameOrId}`, err);
     }
@@ -185,7 +215,7 @@ export const podman = {
     containerPort: number,
   ): Promise<PortBinding | null> {
     try {
-      const info = await docker().getContainer(nameOrId).inspect();
+      const info = await (await engine()).getContainer(nameOrId).inspect();
       const bindings = info.NetworkSettings?.Ports?.[`${containerPort}/tcp`];
       if (!bindings?.length) return null;
       const b = bindings[0];
@@ -204,7 +234,8 @@ export const podman = {
     await this.removeContainer(opts.name, true);
     await pullImage(opts.image);
     try {
-      const container = await docker().createContainer(toCreateOptions(opts));
+      const d = await engine();
+      const container = await d.createContainer(toCreateOptions(opts));
       await container.start();
       return { id: container.id, name: opts.name };
     } catch (err) {
@@ -221,7 +252,8 @@ export const podman = {
 
     let container: Dockerode.Container;
     try {
-      container = await docker().createContainer(toCreateOptions(opts));
+      const d = await engine();
+      container = await d.createContainer(toCreateOptions(opts));
       await container.start();
     } catch (err) {
       throw new PodmanError(`failed to start ${opts.name}`, err);

@@ -130,7 +130,6 @@ All configuration is via **process environment variables** (no `.env` file).
 | `POTATO_DATA_VOLUME` | `potato-network-data` | Shared Podman volume name |
 | `POTATONETWORK_API_TOKEN` | — | Optional Bearer token |
 | `POTATONETWORK_SHAPE_EXCLUDE` | — | Comma/space CIDRs/IPs that bypass shaping+MITM (S3, Graphite, CDN, …) |
-| `PODMAN_SOCKET` | `/run/podman/podman.sock` | Host Engine API socket (`unix://…` also ok) |
 
 ### sitespeed.io
 
@@ -181,7 +180,7 @@ Image is published to GHCR on every push to `main` (and on `v*` tags):
 ghcr.io/kriakiku/potato-temporal-sitespeed:latest
 ```
 
-The worker uses [dockerode](https://www.npmjs.com/package/dockerode) against Podman’s Docker-compatible Engine API over a Unix socket (no `podman` CLI in the image):
+The worker uses [dockerode](https://www.npmjs.com/package/dockerode) against the host Engine API. Socket is auto-detected (**Podman first**, then Docker): `/run/podman/podman.sock`, `$XDG_RUNTIME_DIR/podman/podman.sock`, `/run/user/$UID/podman/podman.sock`, then `/var/run/docker.sock` / `/run/docker.sock`.
 
 ```bash
 podman run --rm -d \

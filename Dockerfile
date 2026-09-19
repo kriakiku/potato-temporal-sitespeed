@@ -11,8 +11,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json bun.lock tsconfig.json ./
 COPY src ./src
 
-ENV NODE_ENV=production \
-    PODMAN_SOCKET=/run/podman/podman.sock
+ENV NODE_ENV=production
 
 USER root
 CMD ["bun", "run", "src/worker.ts"]
