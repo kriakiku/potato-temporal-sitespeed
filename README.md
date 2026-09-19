@@ -199,6 +199,10 @@ Build locally:
 podman build -t potato-temporal-sitespeed .
 ```
 
+## Dependabot
+
+Weekly Dependabot updates (Bun deps, GitHub Actions, Docker base images). After the **CI** workflow succeeds on a Dependabot PR, **Dependabot auto-merge** squash-merges it automatically.
+
 ## Layout
 
 ```text
