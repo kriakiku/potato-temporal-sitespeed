@@ -129,7 +129,7 @@ All configuration is via **process environment variables** (no `.env` file).
 | `POTATO_IMAGE` | `ghcr.io/kriakiku/potato-network:latest` | Image |
 | `POTATO_DATA_VOLUME` | `potato-network-data` | Shared Podman volume name |
 | `POTATONETWORK_API_TOKEN` | — | Optional Bearer token |
-| `POTATONETWORK_SHAPE_EXCLUDE` | — | Comma/space CIDRs/IPs that bypass shaping+MITM (S3, Graphite, CDN, …) |
+| `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs to bypass shaping+MITM (merged with auto-resolved S3/Graphite) |
 
 ### sitespeed.io
 
@@ -164,7 +164,7 @@ All configuration is via **process environment variables** (no `.env` file).
 | `GRAPHITE_NAMESPACE_BASE` | `sitespeed` | Prefixed with `metricPrefix` |
 | `GRAPHITE_AUTH` | — | Optional `user:password` |
 
-Put Graphite/S3 addresses (or their CIDRs) into `POTATONETWORK_SHAPE_EXCLUDE` so result upload is not shaped/MITM’d.
+Put Graphite/S3 addresses (or their CIDRs) into `POTATONETWORK_SHAPE_EXCLUDE` for anything beyond auto-detection. On each PotatoNetwork start the worker resolves `GRAPHITE_HOST`, `S3_ENDPOINT` / bucket region hosts, and `S3_RESULT_BASE_URL` to IPv4 and appends them to `POTATONETWORK_SHAPE_EXCLUDE` so result upload is not shaped/MITM’d.
 
 ## Local Temporal (optional)
 

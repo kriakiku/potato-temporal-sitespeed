@@ -1,6 +1,7 @@
 import { heartbeat } from "@temporalio/activity";
 import { getEnv } from "../lib/env";
 import { podman } from "../lib/podman";
+import { buildShapeExclude } from "../lib/shape-exclude";
 import type { PotatoTier } from "../shared/types";
 
 export type StartPotatoInput = {
@@ -93,8 +94,10 @@ export async function startPotato(input: StartPotatoInput): Promise<PotatoHandle
   if (env.potatoApiToken) {
     containerEnv.POTATONETWORK_API_TOKEN = env.potatoApiToken;
   }
-  if (env.potatoShapeExclude) {
-    containerEnv.POTATONETWORK_SHAPE_EXCLUDE = env.potatoShapeExclude;
+
+  const shapeExclude = await buildShapeExclude(env);
+  if (shapeExclude) {
+    containerEnv.POTATONETWORK_SHAPE_EXCLUDE = shapeExclude;
   }
 
   await podman.runDetached({
