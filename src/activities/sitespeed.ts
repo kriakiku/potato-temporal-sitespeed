@@ -43,6 +43,59 @@ function tail(text: string, max = 4000): string {
   return text.slice(-max);
 }
 
+/**
+ * sitespeed Graphite plugin throws when lighthouse.pageSummary has only null
+ * category scores (common for SPAs / MITM). That fails the whole process even
+ * if Browsertime + S3 succeeded. Treat that as a soft warning.
+ */
+export function isLighthouseGraphiteEmptyDataFailure(text: string): boolean {
+  if (!text.includes("No data to send to graphite for message")) return false;
+  if (!text.includes("lighthouse.pageSummary")) return false;
+
+  const errorHeads = [...text.matchAll(/\] ERROR:\s*(.+)/g)].map((m) =>
+    m[1].trim(),
+  );
+  if (errorHeads.length === 0) return false;
+
+  return errorHeads.every(
+    (line) =>
+      line.startsWith("Error: No data to send to graphite for message:") ||
+      line.startsWith("No data to send to graphite for message:"),
+  );
+}
+
+/** Shell-escape for embedding sitespeed args in bash -lc. */
+function shQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Install Potato MITM CA into the sitespeed image trust store (best-effort),
+ * then exec sitespeed.io with the given args.
+ */
+function sitespeedEntrypointCmd(args: string[]): {
+  entrypoint: string[];
+  cmd: string[];
+} {
+  const quoted = args.map(shQuote).join(" ");
+  const script = [
+    "set +e",
+    "if [ -f /potato-data/ca/potatonetwork-ca.pem ]; then",
+    "  mkdir -p /usr/local/share/ca-certificates /etc/ssl/certs 2>/dev/null",
+    "  cp /potato-data/ca/potatonetwork-ca.pem /usr/local/share/ca-certificates/potatonetwork.crt 2>/dev/null",
+    "  cp /potato-data/ca/potatonetwork-ca.pem /etc/ssl/certs/potatonetwork.pem 2>/dev/null",
+    "  command -v update-ca-certificates >/dev/null && update-ca-certificates >/dev/null 2>&1",
+    "fi",
+    "set -e",
+    `exec sitespeed.io ${quoted}`,
+  ].join("\n");
+
+  return {
+    entrypoint: ["/bin/bash", "-lc"],
+    cmd: [script],
+  };
+}
+
 export async function runSitespeed(
   input: RunSitespeedInput,
 ): Promise<RunSitespeedResult> {
@@ -151,30 +204,42 @@ export async function runSitespeed(
 
   heartbeat({ step: "sitespeed-start" });
 
+  const { entrypoint, cmd: wrappedCmd } = sitespeedEntrypointCmd(cmd);
+
   const { exitCode, stdout, stderr } = await podman.runToCompletion(
     {
       name: containerName,
       image: env.sitespeedImage,
-      cmd,
+      entrypoint,
+      cmd: wrappedCmd,
       networkMode: `container:${input.potatoContainer}`,
       binds: [`${env.potatoDataVolume}:/potato-data:ro`],
       env: {
         NODE_EXTRA_CA_CERTS: "/potato-data/ca/potatonetwork-ca.pem",
         SSL_CERT_FILE: "/potato-data/ca/potatonetwork-ca.pem",
+        REQUESTS_CA_BUNDLE: "/potato-data/ca/potatonetwork-ca.pem",
       },
       shmSizeBytes: 2 * 1024 * 1024 * 1024,
     },
     () => heartbeat({ step: "sitespeed-running" }),
   );
 
+  const combined = `${stderr}\n${stdout}`;
   if (exitCode !== 0) {
-    throw new Error(
-      `sitespeed.io exited with code ${exitCode}\n${tail(stderr) || tail(stdout)}`,
-    );
+    if (isLighthouseGraphiteEmptyDataFailure(combined)) {
+      log.warn(
+        "sitespeed exited non-zero due to empty Lighthouse→Graphite payload; treating as success (Browsertime/S3 may still have completed)",
+        { exitCode, slug },
+      );
+    } else {
+      throw new Error(
+        `sitespeed.io exited with code ${exitCode}\n${tail(stderr) || tail(stdout)}`,
+      );
+    }
   }
 
   return {
-    exitCode,
+    exitCode: 0,
     graphiteNamespace,
     slug,
     stdoutTail: tail(stdout),

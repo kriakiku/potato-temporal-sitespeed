@@ -21,6 +21,8 @@ export type RunContainerOptions = {
   name: string;
   image: string;
   cmd?: string[];
+  /** Override image ENTRYPOINT (e.g. ["/bin/bash","-lc"]). */
+  entrypoint?: string[];
   env?: Record<string, string>;
   capAdd?: string[];
   /** e.g. ["vol:/data", "vol:/potato-data:ro"] */
@@ -147,6 +149,7 @@ function toCreateOptions(
     name: opts.name,
     Image: opts.image,
     Cmd: opts.cmd,
+    Entrypoint: opts.entrypoint,
     Env: opts.env
       ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`)
       : undefined,
