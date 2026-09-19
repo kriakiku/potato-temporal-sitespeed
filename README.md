@@ -12,7 +12,7 @@ A Bun Temporal worker starts a per-run PotatoNetwork sidecar (via Podman/Docker 
 2. Ensures a shared volume for Potato catalog / baseline / MITM CA
 3. Boots PotatoNetwork with `country` + `tier` from the workflow input (crons off)
 4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` with `--network container:<potato>`
-5. Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), `cacheMode` cold|warm
+5. Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), `--cpu` / `--sustainable.enable` / `--axe.enable`, `cacheMode` cold|warm
 6. Tears down the Potato container
 
 ### `potatoRefreshWorkflow`
