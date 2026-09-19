@@ -21,6 +21,8 @@ export type WorkerEnv = {
   potatoApiToken?: string;
   potatoShapeExclude?: string;
   sitespeedImage: string;
+  demoAuthIdentifier?: string;
+  demoAuthPassword?: string;
   s3Endpoint?: string;
   s3Key?: string;
   s3Secret?: string;
@@ -53,6 +55,8 @@ export function getEnv(): WorkerEnv {
       "SITESPEED_IMAGE",
       "sitespeedio/sitespeed.io:38.0.0",
     )!,
+    demoAuthIdentifier: optional("DEMO_AUTH_IDENTIFIER"),
+    demoAuthPassword: optional("DEMO_AUTH_PASSWORD"),
     s3Endpoint: optional("S3_ENDPOINT"),
     s3Key: optional("S3_KEY"),
     s3Secret: optional("S3_SECRET"),

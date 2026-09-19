@@ -11,3 +11,5 @@ export {
 } from "./potato";
 
 export { runSitespeed } from "./sitespeed";
+
+export { resolveEntryUrl } from "./auth";
