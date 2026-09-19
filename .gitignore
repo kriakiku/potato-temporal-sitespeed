@@ -8,3 +8,4 @@ dist/
 tmp/
 .temporal/
 coverage/
+agent-tools/
