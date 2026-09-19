@@ -181,7 +181,7 @@ Image is published to GHCR on every push to `main` (and on `v*` tags):
 ghcr.io/kriakiku/potato-temporal-sitespeed:latest
 ```
 
-The worker talks to the **host Podman Engine API** over a Unix socket (no `podman` CLI in the image):
+The worker uses [dockerode](https://www.npmjs.com/package/dockerode) against Podman’s Docker-compatible Engine API over a Unix socket (no `podman` CLI in the image):
 
 ```bash
 podman run --rm -d \
