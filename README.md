@@ -160,13 +160,32 @@ Put Graphite/S3 addresses (or their CIDRs) into `POTATONETWORK_SHAPE_EXCLUDE` so
 temporal server start-dev
 ```
 
-## Tests
+## Docker
 
-```bash
-bun test
+Image is published to GHCR on every push to `main` (and on `v*` tags):
+
+```text
+ghcr.io/kriakiku/potato-temporal-sitespeed:latest
 ```
 
-Unit tests cover URL building and Graphite namespace helpers (no Podman/Temporal required).
+The worker needs a **host Podman socket** to start PotatoNetwork / sitespeed sidecars:
+
+```bash
+podman run --rm -d \
+  --name potato-temporal-sitespeed \
+  -v /run/podman/podman.sock:/run/podman/podman.sock \
+  -e TEMPORAL_ADDRESS=temporal:7233 \
+  -e TEMPORAL_TASK_QUEUE=sitespeed \
+  -e GRAPHITE_HOST=graphite \
+  -e S3_BUCKET=… -e S3_KEY=… -e S3_SECRET=… \
+  ghcr.io/kriakiku/potato-temporal-sitespeed:latest
+```
+
+Build locally:
+
+```bash
+podman build -t potato-temporal-sitespeed .
+```
 
 ## Layout
 
@@ -179,4 +198,6 @@ src/
   activities/               # Podman + Potato API + sitespeed
   shared/                   # Workflow-safe helpers (URL, types, namespace)
   lib/                      # env + podman wrapper
+.github/workflows/publish.yml
+Dockerfile
 ```

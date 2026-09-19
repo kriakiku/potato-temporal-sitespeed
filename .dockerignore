@@ -1,0 +1,12 @@
+node_modules
+.git
+.github
+agent-tools
+*.md
+.gitignore
+.env
+.env.*
+tmp
+.temporal
+coverage
+tests
