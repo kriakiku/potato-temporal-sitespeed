@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   const tld = arg("tld");
   if (!metricPrefix || !country || !tld) {
     console.error(
-      "Usage: bun run src/start-test.ts --metricPrefix lobby --country BD --tld example.com [--tableId ID] [--direct] [--tier typical]",
+      "Usage: bun run src/start-test.ts --metricPrefix lobby --country BD --tld example.com [--tableId ID] [--direct] [--tier typical] [--cacheMode cold|warm]",
     );
     process.exit(1);
   }
@@ -34,6 +34,7 @@ async function main(): Promise<void> {
     tier: (arg("tier") as SiteSpeedTestInput["tier"]) ?? undefined,
     browser: arg("browser"),
     iterations: arg("iterations") ? Number(arg("iterations")) : undefined,
+    cacheMode: (arg("cacheMode") as SiteSpeedTestInput["cacheMode"]) ?? undefined,
   };
 
   const connection = await Connection.connect({ address: env.temporalAddress });

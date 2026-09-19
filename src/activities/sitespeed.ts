@@ -5,6 +5,17 @@ import {
   buildGraphiteNamespace,
   buildResultSlug,
 } from "../shared/graphite-ns";
+import type { CacheMode } from "../shared/types";
+
+/**
+ * Closest built-in Chrome DevTools preset to Galaxy A05 (no A05 in the list).
+ * A51/71: 412×914 CSS @ 2.625 dpr — mid-range Samsung phone class.
+ * @see https://developer.chrome.com/docs/chromedriver/mobile-emulation
+ */
+export const CHROME_DEVICE_NAME = "Samsung Galaxy A51/71";
+
+/** Mid-range phone CPU slowdown for desktop Chrome emulation. */
+const CPU_THROTTLING_RATE = 4;
 
 export type RunSitespeedInput = {
   potatoContainer: string;
@@ -12,6 +23,7 @@ export type RunSitespeedInput = {
   metricPrefix: string;
   browser: string;
   iterations: number;
+  cacheMode: CacheMode;
 };
 
 export type RunSitespeedResult = {
@@ -35,9 +47,10 @@ export async function runSitespeed(
 
   const graphiteNamespace = buildGraphiteNamespace(
     input.metricPrefix,
+    input.cacheMode,
     env.graphiteNamespaceBase,
   );
-  const slug = buildResultSlug(input.metricPrefix);
+  const slug = buildResultSlug(input.metricPrefix, input.cacheMode);
 
   const cmd: string[] = [
     "-b",
@@ -46,11 +59,32 @@ export async function runSitespeed(
     String(input.iterations),
     "--slug",
     slug,
+    // Mobile preset for Lighthouse / coach; override Chrome device to A51/71
+    "--mobile",
+    "--browsertime.chrome.mobileEmulation.deviceName",
+    CHROME_DEVICE_NAME,
+    "--browsertime.chrome.CPUThrottlingRate",
+    String(CPU_THROTTLING_RATE),
+    // PotatoNetwork shapes traffic — do not double-throttle in browsertime
+    "-c",
+    "native",
+    "--browsertime.connectivity.engine",
+    "external",
+    // plus1 image also ships GPSI; skip external Google PSI
+    "--plugins.remove",
+    "@sitespeed.io/plugin-gpsi",
     "--browsertime.chrome.args",
     "ignore-certificate-errors",
     "--browsertime.chrome.args",
     "ignore-certificate-errors-spki-list",
   ];
+
+  if (input.cacheMode === "warm") {
+    // Same session: hit URL once to fill cache, then measure
+    cmd.push("--preURL", input.url);
+  } else {
+    cmd.push("--browsertime.cacheClearRaw");
+  }
 
   if (env.graphiteHost) {
     cmd.push("--graphite.host", env.graphiteHost);
@@ -83,6 +117,8 @@ export async function runSitespeed(
     url: input.url,
     graphiteNamespace,
     slug,
+    cacheMode: input.cacheMode,
+    deviceName: CHROME_DEVICE_NAME,
   });
 
   heartbeat({ step: "sitespeed-start" });

@@ -2,6 +2,9 @@
 
 export type PotatoTier = "stable" | "typical" | "poor";
 
+/** cold = fresh profile each iteration; warm = preURL warms cache then measure */
+export type CacheMode = "cold" | "warm";
+
 export type SiteSpeedTestInput = {
   /** Graphite/S3 metric prefix — separates product areas on one domain */
   metricPrefix: string;
@@ -15,6 +18,8 @@ export type SiteSpeedTestInput = {
   direct?: boolean;
   browser?: string;
   iterations?: number;
+  /** Default: cold */
+  cacheMode?: CacheMode;
 };
 
 export type NormalizedSiteSpeedTestInput = {
@@ -26,6 +31,7 @@ export type NormalizedSiteSpeedTestInput = {
   direct: boolean;
   browser: string;
   iterations: number;
+  cacheMode: CacheMode;
 };
 
 export type SiteSpeedTestResult = {
@@ -33,6 +39,7 @@ export type SiteSpeedTestResult = {
   msid: string;
   mode: "lobby" | "lobby-table" | "direct-table";
   metricPrefix: string;
+  cacheMode: CacheMode;
   graphiteNamespace: string;
   potatoContainer: string;
   sitespeedExitCode: number;

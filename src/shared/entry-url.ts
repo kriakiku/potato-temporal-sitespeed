@@ -1,4 +1,5 @@
 import type {
+  CacheMode,
   NormalizedSiteSpeedTestInput,
   PotatoTier,
   SiteSpeedTestInput,
@@ -7,6 +8,7 @@ import type {
 const DEFAULT_TIER: PotatoTier = "typical";
 const DEFAULT_BROWSER = "chrome";
 const DEFAULT_ITERATIONS = 3;
+const DEFAULT_CACHE_MODE: CacheMode = "cold";
 
 export function normalizeSiteSpeedInput(
   input: SiteSpeedTestInput,
@@ -31,11 +33,17 @@ export function normalizeSiteSpeedInput(
     throw new Error("tld is required");
   }
   const tld = tldRaw.replace(/^https?:\/\//, "").replace(/\/$/, "");
+
   const tableId = input.tableId?.trim() || undefined;
   const direct = tableId ? (input.direct ?? false) : false;
 
   if (direct && !tableId) {
     throw new Error("direct=true requires tableId");
+  }
+
+  const cacheMode = input.cacheMode ?? DEFAULT_CACHE_MODE;
+  if (cacheMode !== "cold" && cacheMode !== "warm") {
+    throw new Error(`cacheMode must be cold|warm (got: ${cacheMode})`);
   }
 
   return {
@@ -50,5 +58,6 @@ export function normalizeSiteSpeedInput(
       input.iterations && input.iterations > 0
         ? input.iterations
         : DEFAULT_ITERATIONS,
+    cacheMode,
   };
 }

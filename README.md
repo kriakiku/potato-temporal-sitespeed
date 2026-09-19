@@ -9,10 +9,11 @@ Bun + TypeScript Temporal worker that runs [sitespeed.io](https://www.sitespeed.
 1. Ensures a shared Podman volume (`POTATO_DATA_VOLUME`) for catalog / baseline / MITM CA
 2. Starts a dedicated PotatoNetwork container with `POTATONETWORK_PROFILE_COUNTRY` / `TIER` from workflow input
 3. Disables PotatoNetwork crons (`POTATONETWORK_CATALOG_CRON=false`, `POTATONETWORK_BASELINE_CRON=false`)
-4. Runs `sitespeedio/sitespeed.io` with `--network container:<potato>` so all traffic (including DNS) goes through PotatoNetwork
-5. Mounts the shared root CA into sitespeed (`NODE_EXTRA_CA_CERTS` / Chrome cert flags)
-6. Pushes metrics to Graphite under `GRAPHITE_NAMESPACE_BASE.<metricPrefix>` and HTML results to S3
-7. Stops/removes the PotatoNetwork container
+4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` with `--network container:<potato>` so all traffic (including DNS) goes through PotatoNetwork
+5. Emulates **Samsung Galaxy A51/71** (closest built-in Chrome preset to Galaxy A05), `connectivity=native` (Potato shapes), Lighthouse mobile (GPSI disabled)
+6. Mounts the shared root CA into sitespeed (`NODE_EXTRA_CA_CERTS` / Chrome cert flags)
+7. Pushes metrics to Graphite under `GRAPHITE_NAMESPACE_BASE.<metricPrefix>.<cacheMode>` and HTML results to S3
+8. Stops/removes the PotatoNetwork container
 
 ### `potatoRefreshWorkflow`
 
@@ -53,7 +54,8 @@ bun run worker
 bun run start-test -- \
   --metricPrefix lobby \
   --country BD \
-  --tld example.com
+  --tld example.com \
+  --cacheMode cold
 ```
 
 With a table:
@@ -62,8 +64,10 @@ With a table:
 bun run start-test -- \
   --metricPrefix table \
   --country DE \
+  --tld example.com \
   --tier typical \
-  --tableId t-123
+  --tableId t-123 \
+  --cacheMode warm
   # add --direct to set direct=true (default false when tableId is set)
 ```
 
@@ -73,12 +77,13 @@ bun run start-test -- \
 |-------|----------|---------|-------|
 | `metricPrefix` | yes | — | Graphite/S3 separator for product area (`lobby`, `table`, …) |
 | `country` | yes | — | PotatoNetwork boot profile (e.g. `BD`) |
-| `tier` | no | `typical` | `stable` \| `typical` \| `poor` |
 | `tld` | yes | — | Host used in the entry URL (e.g. `example.com`) |
+| `tier` | no | `typical` | `stable` \| `typical` \| `poor` |
 | `tableId` | no | — | When set, appended as query param |
 | `direct` | no | `false` if `tableId` set | Ignored without `tableId` |
 | `browser` | no | `chrome` | sitespeed `-b` |
 | `iterations` | no | `3` | sitespeed `-n` |
+| `cacheMode` | no | `cold` | `cold` (clear cache) \| `warm` (`--preURL` then measure) |
 
 ### Entry URL
 
@@ -97,10 +102,20 @@ sitespeed opens the returned `frameUrl`.
 Even when every test hits the same domain, Graphite keys use:
 
 ```text
-{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.*
+{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{cacheMode}.*
 ```
 
-Example: `sitespeed.lobby.*` vs `sitespeed.table.*`. The same prefix is used as sitespeed `--slug` for S3 paths.
+Example: `sitespeed.lobby.cold.*` vs `sitespeed.lobby.warm.*`. Slug is `<metricPrefix>-<cacheMode>` for S3 paths.
+
+### Mobile emulation
+
+Chrome DevTools has **no Galaxy A05** preset. The worker selects the closest built-in Samsung phone:
+
+```text
+--browsertime.chrome.mobileEmulation.deviceName "Samsung Galaxy A51/71"
+```
+
+(412×914 CSS @ 2.625 dpr). Also sets `--mobile` so Lighthouse uses its mobile preset, plus `CPUThrottlingRate=4`. Network stays `native` / `external` because PotatoNetwork already shapes traffic.
 
 ## Refresh catalog / baseline
 
@@ -135,7 +150,7 @@ All configuration is via **process environment variables** (no `.env` file).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:38.0.0` | Pin a tag in production |
+| `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Browsertime + Lighthouse (GPSI removed at runtime) |
 
 ### Demo auth (entry URL)
 

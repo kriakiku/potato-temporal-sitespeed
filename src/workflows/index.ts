@@ -69,6 +69,7 @@ export async function siteSpeedTestWorkflow(
       metricPrefix: normalized.metricPrefix,
       browser: normalized.browser,
       iterations: normalized.iterations,
+      cacheMode: normalized.cacheMode,
     });
 
     return {
@@ -76,6 +77,7 @@ export async function siteSpeedTestWorkflow(
       msid: entry.msid,
       mode: entry.mode,
       metricPrefix: normalized.metricPrefix,
+      cacheMode: normalized.cacheMode,
       graphiteNamespace: result.graphiteNamespace,
       potatoContainer: potato.containerName,
       sitespeedExitCode: result.exitCode,
