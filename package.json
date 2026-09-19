@@ -1,0 +1,29 @@
+{
+  "name": "potato-temporal-sitespeed",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "worker": "bun run src/worker.ts",
+    "start": "bun run src/worker.ts",
+    "start-test": "bun run src/start-test.ts",
+    "start-refresh": "bun run src/start-refresh.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@temporalio/activity": "^1.24.0",
+    "@temporalio/client": "^1.24.0",
+    "@temporalio/common": "^1.24.0",
+    "@temporalio/worker": "^1.24.0",
+    "@temporalio/workflow": "^1.24.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "typescript": "^5.8.3"
+  },
+  "trustedDependencies": [
+    "@swc/core",
+    "protobufjs"
+  ]
+}
