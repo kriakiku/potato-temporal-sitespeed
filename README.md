@@ -106,8 +106,9 @@ All config is process env (no `.env` file).
 | `TEMPORAL_ADDRESS` | `localhost:7233` | |
 | `TEMPORAL_NAMESPACE` | `default` | |
 | `TEMPORAL_TASK_QUEUE` | `sitespeed` | |
-| `POTATO_IMAGE` | `ghcr.io/kriakiku/potato-network:latest` | |
+| `POTATO_IMAGE` | `ghcr.io/kriakiku/potato-network:v0.4.0` | |
 | `POTATO_DATA_VOLUME` | `potato-network-data` | Shared volume name |
+| `POTATO_RULES_EXPR` | — | Absolute **engine-host** path to `rules.expr`; bind-mounted to `/data/rules.expr` (Potato hot-reloads on mtime) |
 | `POTATONETWORK_API_TOKEN` | — | Optional |
 | `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Graphite |
 | `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse |
@@ -121,6 +122,14 @@ All config is process env (no `.env` file).
 | `GRAPHITE_AUTH` | — | Optional `user:password` |
 
 On each Potato start the worker resolves Graphite/S3 hosts to IPv4 and appends them to `POTATONETWORK_SHAPE_EXCLUDE` so result upload is not shaped/MITM’d.
+
+### Custom path-delay rules (`POTATO_RULES_EXPR`)
+
+One shared expr file for every PotatoNetwork container this worker starts. Set `POTATO_RULES_EXPR` to an **absolute path on the Podman/Docker host** (the machine that owns the engine socket — not a path only inside the worker container unless that path is the same on the host).
+
+The file is bind-mounted to `/data/rules.expr`. PotatoNetwork **hot-reloads on mtime**, so you can edit the host file while runs are in flight; no worker restart needed. Prefer in-place edits (or overwrite contents) — an atomic rename that replaces the inode can leave a stale mount.
+
+See [PotatoNetwork path rules](https://kriakiku.github.io/potato-network/rules/).
 
 ## Docker
 
@@ -140,6 +149,8 @@ podman run --rm -d \
   -e TEMPORAL_TASK_QUEUE=sitespeed \
   -e DEMO_AUTH_IDENTIFIER=… \
   -e DEMO_AUTH_PASSWORD=… \
+  -e POTATO_RULES_EXPR=/etc/potato/rules.expr \
+  -v /etc/potato/rules.expr:/etc/potato/rules.expr:ro \
   -e GRAPHITE_HOST=graphite \
   -e S3_BUCKET=… -e S3_KEY=… -e S3_SECRET=… \
   ghcr.io/kriakiku/potato-temporal-sitespeed:latest

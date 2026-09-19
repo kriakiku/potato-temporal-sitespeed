@@ -1,3 +1,4 @@
+import { existsSync, statSync } from "node:fs";
 import { heartbeat } from "@temporalio/activity";
 import { getEnv } from "../lib/env";
 import { podman } from "../lib/podman";
@@ -17,9 +18,40 @@ export type PotatoHandle = {
   apiBaseUrl: string;
 };
 
+/** PotatoNetwork path-delay script inside the container (hot-reloaded on mtime). */
+export const POTATO_RULES_EXPR_CONTAINER_PATH = "/data/rules.expr";
+
 function containerNameFor(runId: string, prefix = "potato"): string {
   const safe = runId.replace(/[^a-zA-Z0-9_.-]/g, "").slice(0, 48);
   return `${prefix}-${safe || Date.now()}`;
+}
+
+function potatoBinds(dataVolume: string, rulesExprHostPath?: string): string[] {
+  const binds = [`${dataVolume}:/data`];
+  if (rulesExprHostPath) {
+    binds.push(
+      `${rulesExprHostPath}:${POTATO_RULES_EXPR_CONTAINER_PATH}:ro`,
+    );
+  }
+  return binds;
+}
+
+/** Validate host path for POTATO_RULES_EXPR (interpreted by the engine host). */
+export function assertPotatoRulesExpr(hostPath: string): void {
+  if (!hostPath.startsWith("/")) {
+    throw new Error(
+      `POTATO_RULES_EXPR must be an absolute path on the Podman/Docker host (got: ${hostPath})`,
+    );
+  }
+  if (!existsSync(hostPath)) {
+    throw new Error(
+      `POTATO_RULES_EXPR file not found on this host: ${hostPath}`,
+    );
+  }
+  const st = statSync(hostPath);
+  if (!st.isFile()) {
+    throw new Error(`POTATO_RULES_EXPR must be a regular file: ${hostPath}`);
+  }
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -100,11 +132,15 @@ export async function startPotato(input: StartPotatoInput): Promise<PotatoHandle
     containerEnv.POTATONETWORK_SHAPE_EXCLUDE = shapeExclude;
   }
 
+  if (env.potatoRulesExpr) {
+    assertPotatoRulesExpr(env.potatoRulesExpr);
+  }
+
   await podman.runDetached({
     name: containerName,
     image: env.potatoImage,
     capAdd: ["NET_ADMIN"],
-    binds: [`${env.potatoDataVolume}:/data`],
+    binds: potatoBinds(env.potatoDataVolume, env.potatoRulesExpr),
     publish: [{ containerPort: 7783, hostIp: "127.0.0.1" }],
     env: containerEnv,
   });

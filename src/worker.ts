@@ -14,6 +14,7 @@ async function main(): Promise<void> {
       potatoImage: env.potatoImage,
       sitespeedImage: env.sitespeedImage,
       volume: env.potatoDataVolume,
+      potatoRulesExpr: env.potatoRulesExpr ?? null,
     }),
   );
 

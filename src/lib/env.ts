@@ -20,6 +20,13 @@ export type WorkerEnv = {
   potatoDataVolume: string;
   potatoApiToken?: string;
   potatoShapeExclude?: string;
+  /**
+   * Absolute path on the Podman/Docker engine host to a rules.expr file.
+   * Bind-mounted to /data/rules.expr in every PotatoNetwork container.
+   * Potato hot-reloads on mtime — edit the host file to swap policy without
+   * restarting the worker (avoid atomic rename that replaces the inode).
+   */
+  potatoRulesExpr?: string;
   sitespeedImage: string;
   demoAuthIdentifier?: string;
   demoAuthPassword?: string;
@@ -46,11 +53,12 @@ export function getEnv(): WorkerEnv {
     temporalTaskQueue: optional("TEMPORAL_TASK_QUEUE", "sitespeed")!,
     potatoImage: optional(
       "POTATO_IMAGE",
-      "ghcr.io/kriakiku/potato-network:latest",
+      "ghcr.io/kriakiku/potato-network:v0.4.0",
     )!,
     potatoDataVolume: optional("POTATO_DATA_VOLUME", "potato-network-data")!,
     potatoApiToken: optional("POTATONETWORK_API_TOKEN"),
     potatoShapeExclude: optional("POTATONETWORK_SHAPE_EXCLUDE"),
+    potatoRulesExpr: optional("POTATO_RULES_EXPR"),
     sitespeedImage: optional(
       "SITESPEED_IMAGE",
       "sitespeedio/sitespeed.io:40.0.0-plus1",
