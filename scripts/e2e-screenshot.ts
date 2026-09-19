@@ -15,7 +15,7 @@ import { resolve } from "node:path";
 import { buildSitespeedBrowserArgs } from "../src/shared/sitespeed-args";
 import {
   analyzeScreenshotBlackness,
-  findLargestPng,
+  findBestPageScreenshot,
 } from "../src/lib/screenshot-blackness";
 
 const DEFAULT_URL =
@@ -105,7 +105,7 @@ async function main(): Promise<void> {
     process.exit(exitCode || 1);
   }
 
-  const pngPath = await findLargestPng(outDir);
+  const pngPath = await findBestPageScreenshot(outDir);
   if (!pngPath) {
     console.error(`No PNG screenshots found under ${outDir}`);
     process.exit(1);

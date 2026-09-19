@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { PNG } from "pngjs";
 
@@ -31,20 +31,30 @@ export async function findPngFiles(dir: string): Promise<string[]> {
   return out;
 }
 
-/** Largest PNG by byte size (sitespeed screenshot, not tiny icons). */
-export async function findLargestPng(dir: string): Promise<string | undefined> {
+/** Prefer real page screenshots over HTML report icons / layout-shift overlays. */
+export async function findBestPageScreenshot(
+  dir: string,
+): Promise<string | undefined> {
   const files = await findPngFiles(dir);
   if (files.length === 0) return undefined;
-  let best: string | undefined;
-  let bestSize = -1;
-  for (const f of files) {
-    const s = await stat(f);
-    if (s.size > bestSize) {
-      bestSize = s.size;
-      best = f;
-    }
-  }
-  return best;
+
+  const score = (p: string) => {
+    const n = p.replace(/\\/g, "/").toLowerCase();
+    let s = 0;
+    if (n.includes("/data/screenshots/")) s += 100;
+    if (n.endsWith("/afterpagecompletecheck.png")) s += 50;
+    if (n.endsWith("/largestcontentfulpaint.png")) s += 40;
+    if (n.includes("/img/") || n.includes("/ico/")) s -= 100;
+    if (n.includes("layoutshift")) s -= 10;
+    return s;
+  };
+
+  const ranked = [...files].sort((a, b) => {
+    const ds = score(b) - score(a);
+    if (ds !== 0) return ds;
+    return b.length - a.length;
+  });
+  return ranked[0];
 }
 
 /**
