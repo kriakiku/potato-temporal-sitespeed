@@ -1,35 +1,12 @@
 import { isIP } from "node:net";
 import { Resolver } from "node:dns/promises";
 import type { WorkerEnv } from "./env";
+import { extractHostname } from "./hostname";
+import { resolveHostForPotatoNetns } from "./host-gateway";
+
+export { extractHostname };
 
 const resolver = new Resolver();
-
-/** Extract hostname from host, host:port, or URL. */
-export function extractHostname(raw: string): string | undefined {
-  const value = raw.trim();
-  if (!value) return undefined;
-
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value)) {
-    try {
-      return new URL(value).hostname || undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  // host:port (IPv4 or name) — not IPv6 with brackets for simplicity
-  if (value.includes("/") && !value.includes("://")) {
-    // bare CIDR already — keep as-is via caller
-    return value;
-  }
-
-  const hostPort = value.match(/^([^:]+):(\d+)$/);
-  if (hostPort && !isIP(value)) {
-    return hostPort[1];
-  }
-
-  return value;
-}
 
 function s3Hostnames(env: WorkerEnv): string[] {
   const hosts: string[] = [];
@@ -73,7 +50,6 @@ async function resolveHostToIpv4(host: string): Promise<string[]> {
     return addrs;
   } catch {
     try {
-      // fallback: lookup may return A via system
       const { lookup } = await import("node:dns/promises");
       const r = await lookup(host, { family: 4, all: true });
       return r.map((x) => x.address);
@@ -86,6 +62,7 @@ async function resolveHostToIpv4(host: string): Promise<string[]> {
 /**
  * Build POTATONETWORK_SHAPE_EXCLUDE: manual env entries plus resolved
  * IPv4 addresses for Graphite and S3 export endpoints.
+ * Loopback Graphite/S3 hosts are rewritten to the host gateway first.
  */
 export async function buildShapeExclude(env: WorkerEnv): Promise<string> {
   const manual = (env.potatoShapeExclude ?? "")
@@ -93,12 +70,17 @@ export async function buildShapeExclude(env: WorkerEnv): Promise<string> {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const hostnames = [
+  const rawHosts = [
     ...new Set([...graphiteHostnames(env), ...s3Hostnames(env)]),
   ];
 
+  const hostnames: string[] = [];
+  for (const host of rawHosts) {
+    hostnames.push(await resolveHostForPotatoNetns(host));
+  }
+
   const resolved: string[] = [];
-  for (const host of hostnames) {
+  for (const host of [...new Set(hostnames)]) {
     resolved.push(...(await resolveHostToIpv4(host)));
   }
 

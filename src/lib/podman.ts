@@ -82,6 +82,15 @@ export function detectedSocketPath(): string | undefined {
   return resolvedSocket;
 }
 
+function isIPv4(s: string): boolean {
+  const parts = s.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((p) => {
+    const n = Number(p);
+    return Number.isInteger(n) && n >= 0 && n <= 255;
+  });
+}
+
 function splitImage(image: string): { repo: string; tag: string } {
   const lastSlash = image.lastIndexOf("/");
   const lastColon = image.lastIndexOf(":");
@@ -160,6 +169,30 @@ export const podman = {
     } catch (err) {
       throw new PodmanError("Container engine ping failed", err);
     }
+  },
+
+  /** Best-effort IPv4 gateway from the engine default/"podman" network. */
+  async defaultNetworkGateway(): Promise<string | undefined> {
+    try {
+      const d = await engine();
+      const networks = await d.listNetworks();
+      const preferred = ["podman", "bridge"];
+      const ordered = [
+        ...networks.filter((n) => preferred.includes(n.Name)),
+        ...networks.filter((n) => !preferred.includes(n.Name)),
+      ];
+      for (const n of ordered) {
+        const info = await d.getNetwork(n.Id).inspect();
+        const configs = info.IPAM?.Config ?? [];
+        for (const c of configs) {
+          const gw = (c as { Gateway?: string }).Gateway?.trim();
+          if (gw && isIPv4(gw)) return gw;
+        }
+      }
+    } catch {
+      // ignore — caller falls back to HOST_GATEWAY / host.*.internal
+    }
+    return undefined;
   },
 
   async volumeExists(name: string): Promise<boolean> {

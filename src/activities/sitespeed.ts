@@ -1,5 +1,9 @@
 import { heartbeat, log } from "@temporalio/activity";
 import { assertExportConfig, getEnv } from "../lib/env";
+import {
+  resolveEndpointForPotatoNetns,
+  resolveHostForPotatoNetns,
+} from "../lib/host-gateway";
 import { podman } from "../lib/podman";
 import {
   buildGraphiteNamespace,
@@ -87,7 +91,14 @@ export async function runSitespeed(
   }
 
   if (env.graphiteHost) {
-    cmd.push("--graphite.host", env.graphiteHost);
+    const graphiteHost = await resolveHostForPotatoNetns(env.graphiteHost);
+    if (graphiteHost !== env.graphiteHost) {
+      log.info("Rewrote loopback GRAPHITE_HOST for potato netns", {
+        from: env.graphiteHost,
+        to: graphiteHost,
+      });
+    }
+    cmd.push("--graphite.host", graphiteHost);
     cmd.push("--graphite.port", env.graphitePort);
     cmd.push("--graphite.namespace", graphiteNamespace);
     cmd.push("--graphite.addSlugToKey", "true");
@@ -100,13 +111,21 @@ export async function runSitespeed(
     cmd.push("--s3.bucketname", env.s3Bucket);
     cmd.push("--s3.key", env.s3Key);
     cmd.push("--s3.secret", env.s3Secret);
-    if (env.s3Endpoint) cmd.push("--s3.endpoint", env.s3Endpoint);
+    if (env.s3Endpoint) {
+      cmd.push(
+        "--s3.endpoint",
+        await resolveEndpointForPotatoNetns(env.s3Endpoint),
+      );
+    }
     if (env.s3Region) cmd.push("--s3.region", env.s3Region);
     if (env.s3ForcePathStyle) {
       cmd.push("--s3.options.forcePathStyle", "true");
     }
     if (env.s3ResultBaseUrl) {
-      cmd.push("--resultBaseURL", env.s3ResultBaseUrl);
+      cmd.push(
+        "--resultBaseURL",
+        await resolveEndpointForPotatoNetns(env.s3ResultBaseUrl),
+      );
     }
     cmd.push("--s3.removeLocalResult", "true");
   }

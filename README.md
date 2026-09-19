@@ -117,12 +117,15 @@ All config is process env (no `.env` file).
 | `S3_BUCKET` / `S3_KEY` / `S3_SECRET` | — | Upload when all three set |
 | `S3_ENDPOINT` / `S3_REGION` / `S3_RESULT_BASE_URL` | — | Optional; endpoint must include `http://` or `https://` |
 | `S3_FORCE_PATH_STYLE` | `true` if `S3_ENDPOINT` set, else `false` | Path-style URLs (`endpoint/bucket/…`) instead of `bucket.endpoint` |
-| `GRAPHITE_HOST` | — | Skip Graphite if unset |
+| `GRAPHITE_HOST` | — | Skip Graphite if unset. `127.0.0.1`/`localhost` are rewritten to the host gateway for potato netns |
 | `GRAPHITE_PORT` | `2003` | |
 | `GRAPHITE_NAMESPACE_BASE` | `sitespeed` | |
 | `GRAPHITE_AUTH` | — | Optional `user:password` |
+| `HOST_GATEWAY` | auto | Host IPv4 as seen from containers; required if loopback Graphite/S3 and auto-detect fails |
 
 On each Potato start the worker resolves Graphite/S3 hosts to IPv4 and appends them to `POTATONETWORK_SHAPE_EXCLUDE` so result upload is not shaped/MITM’d.
+
+Sitespeed runs in Potato’s netns, so `GRAPHITE_HOST=127.0.0.1` would mean Potato’s own loopback. The worker rewrites loopback Graphite/S3 endpoints to `HOST_GATEWAY` (or auto-detected `host.containers.internal` / Podman bridge gateway) before passing them to sitespeed and into `SHAPE_EXCLUDE`. **Carbon must listen on that address** (e.g. `0.0.0.0:2003`), not only host loopback.
 
 ### Custom path-delay rules (`POTATO_RULES_EXPR`)
 

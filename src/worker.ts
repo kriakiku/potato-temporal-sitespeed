@@ -15,6 +15,7 @@ async function main(): Promise<void> {
       sitespeedImage: env.sitespeedImage,
       volume: env.potatoDataVolume,
       potatoRulesExpr: env.potatoRulesExpr ?? null,
+      hostGateway: env.hostGateway ?? null,
     }),
   );
 

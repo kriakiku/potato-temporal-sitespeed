@@ -55,6 +55,12 @@ export type WorkerEnv = {
   graphitePort: string;
   graphiteNamespaceBase: string;
   graphiteAuth?: string;
+  /**
+   * IPv4 (or resolvable name) of the engine host as seen from container
+   * networks. Used when GRAPHITE_HOST / S3_ENDPOINT is loopback so sitespeed
+   * inside potato netns can reach host services.
+   */
+  hostGateway?: string;
 };
 
 let cached: WorkerEnv | undefined;
@@ -95,6 +101,7 @@ export function getEnv(): WorkerEnv {
     graphitePort: optional("GRAPHITE_PORT", "2003")!,
     graphiteNamespaceBase: optional("GRAPHITE_NAMESPACE_BASE", "sitespeed")!,
     graphiteAuth: optional("GRAPHITE_AUTH"),
+    hostGateway: optional("HOST_GATEWAY"),
   };
 
   return cached;
