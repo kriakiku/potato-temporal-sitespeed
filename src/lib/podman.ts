@@ -1,14 +1,11 @@
 /**
- * Podman/Docker Engine API client over a Unix socket (no podman CLI).
- * Bun fetch supports `unix:`; default socket is /run/podman/podman.sock.
+ * Thin helpers around dockerode talking to Podman's Docker-compatible
+ * Engine API on a Unix socket (no custom HTTP client).
  */
+import Dockerode from "dockerode";
 
 export class PodmanError extends Error {
-  constructor(
-    message: string,
-    readonly status?: number,
-    readonly body?: string,
-  ) {
+  constructor(message: string, readonly cause?: unknown) {
     super(message);
     this.name = "PodmanError";
   }
@@ -29,15 +26,12 @@ export type RunContainerOptions = {
   binds?: string[];
   /** e.g. "container:potato-xyz" */
   networkMode?: string;
-  /** Publish containerPort; empty hostPort → random */
   publish?: Array<{
     containerPort: number;
     hostIp?: string;
     hostPort?: string;
   }>;
   shmSizeBytes?: number;
-  /** Remove container when it exits (Docker AutoRemove) */
-  autoRemove?: boolean;
 };
 
 function socketPath(): string {
@@ -54,179 +48,135 @@ function socketPath(): string {
   );
 }
 
-async function api(path: string, init?: RequestInit): Promise<Response> {
-  const unix = socketPath();
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    ...(init?.body ? { "Content-Type": "application/json" } : {}),
-    ...(init?.headers as Record<string, string> | undefined),
-  };
+let client: Dockerode | undefined;
 
-  return fetch(`http://localhost/v1.41${path}`, {
-    ...init,
-    headers,
-    // Bun: dial Podman/Docker Engine API over a Unix socket
-    unix,
-  } as RequestInit & { unix: string });
-}
-
-async function readError(res: Response): Promise<string> {
-  try {
-    const text = await res.text();
-    try {
-      const j = JSON.parse(text) as { message?: string };
-      return j.message || text;
-    } catch {
-      return text;
-    }
-  } catch {
-    return res.statusText;
+function docker(): Dockerode {
+  if (!client) {
+    client = new Dockerode({ socketPath: socketPath() });
   }
+  return client;
 }
 
-function splitImage(image: string): { name: string; tag: string } {
+function splitImage(image: string): { repo: string; tag: string } {
   const lastSlash = image.lastIndexOf("/");
   const lastColon = image.lastIndexOf(":");
   if (lastColon > lastSlash) {
     return {
-      name: image.slice(0, lastColon),
+      repo: image.slice(0, lastColon),
       tag: image.slice(lastColon + 1) || "latest",
     };
   }
-  return { name: image, tag: "latest" };
+  return { repo: image, tag: "latest" };
+}
+
+async function pullImage(image: string): Promise<void> {
+  const { repo, tag } = splitImage(image);
+  await new Promise<void>((resolve, reject) => {
+    docker().pull(`${repo}:${tag}`, (err: Error | null, stream: NodeJS.ReadableStream) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      docker().modem.followProgress(stream, (err2: Error | null) => {
+        if (err2) reject(err2);
+        else resolve();
+      });
+    });
+  });
+}
+
+function toCreateOptions(opts: RunContainerOptions): Dockerode.ContainerCreateOptions {
+  const exposed: Record<string, object> = {};
+  const portBindings: Record<string, Array<{ HostIp?: string; HostPort: string }>> =
+    {};
+
+  for (const p of opts.publish ?? []) {
+    const key = `${p.containerPort}/tcp`;
+    exposed[key] = {};
+    portBindings[key] = [
+      {
+        HostIp: p.hostIp ?? "127.0.0.1",
+        HostPort: p.hostPort ?? "",
+      },
+    ];
+  }
+
+  return {
+    name: opts.name,
+    Image: opts.image,
+    Cmd: opts.cmd,
+    Env: opts.env
+      ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`)
+      : undefined,
+    ExposedPorts: Object.keys(exposed).length ? exposed : undefined,
+    HostConfig: {
+      CapAdd: opts.capAdd,
+      Binds: opts.binds,
+      NetworkMode: opts.networkMode,
+      PortBindings: Object.keys(portBindings).length ? portBindings : undefined,
+      ShmSize: opts.shmSizeBytes,
+      AutoRemove: false,
+    },
+  };
 }
 
 export const podman = {
   socketPath,
 
   async ping(): Promise<void> {
-    const res = await api("/_ping");
-    if (!res.ok) {
-      throw new PodmanError(
-        `Podman socket ping failed: ${await readError(res)}`,
-        res.status,
-      );
+    try {
+      await docker().ping();
+    } catch (err) {
+      throw new PodmanError("Podman socket ping failed", err);
     }
   },
 
   async volumeExists(name: string): Promise<boolean> {
-    const res = await api(`/volumes/${encodeURIComponent(name)}`);
-    return res.ok;
-  },
-
-  async volumeCreate(name: string): Promise<void> {
-    const res = await api("/volumes/create", {
-      method: "POST",
-      body: JSON.stringify({ Name: name }),
-    });
-    if (!res.ok && res.status !== 409) {
-      throw new PodmanError(
-        `volume create failed: ${await readError(res)}`,
-        res.status,
-      );
+    try {
+      await docker().getVolume(name).inspect();
+      return true;
+    } catch {
+      return false;
     }
   },
 
-  async ensureImage(image: string): Promise<void> {
-    const { name, tag } = splitImage(image);
-    const qs = new URLSearchParams({ fromImage: name, tag });
-    const res = await api(`/images/create?${qs}`, { method: "POST" });
-    // Pull streams JSON progress lines; drain body
-    const text = await res.text();
-    if (!res.ok) {
-      throw new PodmanError(`image pull failed: ${text}`, res.status, text);
+  async volumeCreate(name: string): Promise<void> {
+    try {
+      await docker().createVolume({ Name: name });
+    } catch (err: unknown) {
+      const status =
+        err && typeof err === "object" && "statusCode" in err
+          ? (err as { statusCode?: number }).statusCode
+          : undefined;
+      if (status === 409) return;
+      throw new PodmanError(`volume create failed: ${name}`, err);
     }
   },
 
   async removeContainer(nameOrId: string, force = true): Promise<void> {
-    const qs = force ? "?force=true&v=true" : "";
-    const res = await api(
-      `/containers/${encodeURIComponent(nameOrId)}${qs}`,
-      { method: "DELETE" },
-    );
-    if (!res.ok && res.status !== 404) {
-      throw new PodmanError(
-        `container rm failed: ${await readError(res)}`,
-        res.status,
-      );
+    try {
+      await docker().getContainer(nameOrId).remove({ force, v: true });
+    } catch (err: unknown) {
+      const status =
+        err && typeof err === "object" && "statusCode" in err
+          ? (err as { statusCode?: number }).statusCode
+          : undefined;
+      if (status === 404) return;
+      throw new PodmanError(`container rm failed: ${nameOrId}`, err);
     }
   },
 
   async stopContainer(nameOrId: string, timeoutSec = 10): Promise<void> {
-    const res = await api(
-      `/containers/${encodeURIComponent(nameOrId)}/stop?t=${timeoutSec}`,
-      { method: "POST" },
-    );
-    if (!res.ok && res.status !== 304 && res.status !== 404) {
-      throw new PodmanError(
-        `container stop failed: ${await readError(res)}`,
-        res.status,
-      );
-    }
-  },
-
-  async createContainer(opts: RunContainerOptions): Promise<string> {
-    await this.ensureImage(opts.image);
-
-    const exposed: Record<string, Record<string, never>> = {};
-    const portBindings: Record<
-      string,
-      Array<{ HostIp?: string; HostPort: string }>
-    > = {};
-
-    for (const p of opts.publish ?? []) {
-      const key = `${p.containerPort}/tcp`;
-      exposed[key] = {};
-      portBindings[key] = [
-        {
-          HostIp: p.hostIp ?? "127.0.0.1",
-          HostPort: p.hostPort ?? "",
-        },
-      ];
-    }
-
-    const body = {
-      Image: opts.image,
-      Cmd: opts.cmd,
-      Env: opts.env
-        ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`)
-        : undefined,
-      ExposedPorts: Object.keys(exposed).length ? exposed : undefined,
-      HostConfig: {
-        CapAdd: opts.capAdd,
-        Binds: opts.binds,
-        NetworkMode: opts.networkMode,
-        PortBindings: Object.keys(portBindings).length
-          ? portBindings
-          : undefined,
-        ShmSize: opts.shmSizeBytes,
-        AutoRemove: opts.autoRemove ?? false,
-      },
-    };
-
-    const res = await api(
-      `/containers/create?name=${encodeURIComponent(opts.name)}`,
-      { method: "POST", body: JSON.stringify(body) },
-    );
-    if (!res.ok) {
-      throw new PodmanError(
-        `container create failed: ${await readError(res)}`,
-        res.status,
-      );
-    }
-    const json = (await res.json()) as { Id: string };
-    return json.Id;
-  },
-
-  async startContainer(id: string): Promise<void> {
-    const res = await api(`/containers/${encodeURIComponent(id)}/start`, {
-      method: "POST",
-    });
-    if (!res.ok && res.status !== 304) {
-      throw new PodmanError(
-        `container start failed: ${await readError(res)}`,
-        res.status,
-      );
+    try {
+      await docker().getContainer(nameOrId).stop({ t: timeoutSec });
+    } catch (err: unknown) {
+      const status =
+        err && typeof err === "object" && "statusCode" in err
+          ? (err as { statusCode?: number }).statusCode
+          : undefined;
+      // 304 = already stopped, 404 = gone
+      if (status === 304 || status === 404) return;
+      throw new PodmanError(`container stop failed: ${nameOrId}`, err);
     }
   },
 
@@ -234,77 +184,57 @@ export const podman = {
     nameOrId: string,
     containerPort: number,
   ): Promise<PortBinding | null> {
-    const res = await api(`/containers/${encodeURIComponent(nameOrId)}/json`);
-    if (!res.ok) return null;
-    const json = (await res.json()) as {
-      NetworkSettings?: {
-        Ports?: Record<
-          string,
-          Array<{ HostIp: string; HostPort: string }> | null
-        >;
+    try {
+      const info = await docker().getContainer(nameOrId).inspect();
+      const bindings = info.NetworkSettings?.Ports?.[`${containerPort}/tcp`];
+      if (!bindings?.length) return null;
+      const b = bindings[0];
+      return {
+        host: b.HostIp || "127.0.0.1",
+        port: Number(b.HostPort),
       };
-    };
-    const bindings = json.NetworkSettings?.Ports?.[`${containerPort}/tcp`];
-    if (!bindings?.length) return null;
-    const b = bindings[0];
-    return { host: b.HostIp || "127.0.0.1", port: Number(b.HostPort) };
-  },
-
-  async wait(nameOrId: string): Promise<number> {
-    const res = await api(
-      `/containers/${encodeURIComponent(nameOrId)}/wait`,
-      { method: "POST" },
-    );
-    if (!res.ok) {
-      throw new PodmanError(
-        `container wait failed: ${await readError(res)}`,
-        res.status,
-      );
+    } catch {
+      return null;
     }
-    const json = (await res.json()) as { StatusCode: number };
-    return json.StatusCode;
   },
 
-  async logs(nameOrId: string): Promise<{ stdout: string; stderr: string }> {
-    const res = await api(
-      `/containers/${encodeURIComponent(nameOrId)}/logs?stdout=1&stderr=1&timestamps=0`,
-    );
-    if (!res.ok) {
-      throw new PodmanError(
-        `container logs failed: ${await readError(res)}`,
-        res.status,
-      );
-    }
-    const buf = new Uint8Array(await res.arrayBuffer());
-    return demuxDockerLogs(buf);
-  },
-
-  /** Create + start a detached container; returns name (stable) and id. */
   async runDetached(
     opts: RunContainerOptions,
   ): Promise<{ id: string; name: string }> {
     await this.removeContainer(opts.name, true);
-    const id = await this.createContainer({ ...opts, autoRemove: false });
-    await this.startContainer(id);
-    return { id, name: opts.name };
+    await pullImage(opts.image);
+    try {
+      const container = await docker().createContainer(toCreateOptions(opts));
+      await container.start();
+      return { id: container.id, name: opts.name };
+    } catch (err) {
+      throw new PodmanError(`failed to run detached ${opts.name}`, err);
+    }
   },
 
-  /**
-   * Run to completion, heartbeating while waiting.
-   * Collects logs after exit, then removes the container.
-   */
   async runToCompletion(
     opts: RunContainerOptions,
     onTick?: () => void,
   ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
     await this.removeContainer(opts.name, true);
-    const id = await this.createContainer({ ...opts, autoRemove: false });
-    await this.startContainer(id);
+    await pullImage(opts.image);
+
+    let container: Dockerode.Container;
+    try {
+      container = await docker().createContainer(toCreateOptions(opts));
+      await container.start();
+    } catch (err) {
+      throw new PodmanError(`failed to start ${opts.name}`, err);
+    }
 
     const tick = setInterval(() => onTick?.(), 10_000);
-    let exitCode: number;
+    let exitCode = 1;
     try {
-      exitCode = await this.wait(id);
+      const result = await container.wait();
+      exitCode =
+        typeof result === "object" && result && "StatusCode" in result
+          ? Number((result as { StatusCode: number }).StatusCode)
+          : 1;
     } finally {
       clearInterval(tick);
     }
@@ -312,14 +242,20 @@ export const podman = {
     let stdout = "";
     let stderr = "";
     try {
-      const logs = await this.logs(id);
-      stdout = logs.stdout;
-      stderr = logs.stderr;
+      const buf = (await container.logs({
+        stdout: true,
+        stderr: true,
+        follow: false,
+        timestamps: false,
+      })) as Buffer;
+      const demuxed = demuxDockerLogs(new Uint8Array(buf));
+      stdout = demuxed.stdout;
+      stderr = demuxed.stderr;
     } catch {
-      // container may already be gone
+      // ignore log fetch errors
     }
 
-    await this.removeContainer(id, true);
+    await this.removeContainer(container.id, true);
     return { exitCode, stdout, stderr };
   },
 };
@@ -333,7 +269,6 @@ function demuxDockerLogs(buf: Uint8Array): {
   let stdout = "";
   let stderr = "";
   let i = 0;
-  // If no headers (TTY), treat all as stdout
   if (buf.length < 8) {
     return { stdout: decoder.decode(buf), stderr: "" };
   }
@@ -352,7 +287,6 @@ function demuxDockerLogs(buf: Uint8Array): {
     if (stream === 2) stderr += chunk;
     else stdout += chunk;
   }
-  // Fallback: undecodable multiplex → raw text
   if (!stdout && !stderr && buf.length) {
     stdout = decoder.decode(buf);
   }

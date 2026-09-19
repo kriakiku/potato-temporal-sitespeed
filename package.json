@@ -15,14 +15,18 @@
     "@temporalio/client": "^1.24.0",
     "@temporalio/common": "^1.24.0",
     "@temporalio/worker": "^1.24.0",
-    "@temporalio/workflow": "^1.24.0"
+    "@temporalio/workflow": "^1.24.0",
+    "dockerode": "^5.0.1"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",
+    "@types/dockerode": "^4.0.1",
     "typescript": "^5.8.3"
   },
   "trustedDependencies": [
     "@swc/core",
-    "protobufjs"
+    "cpu-features",
+    "protobufjs",
+    "ssh2"
   ]
 }
