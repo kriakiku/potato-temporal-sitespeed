@@ -22,6 +22,16 @@ function optionalBool(name: string, fallback: boolean): boolean {
   );
 }
 
+function optionalInt(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1 || !Number.isInteger(n)) {
+    throw new Error(`${name} must be an integer >= 1, got: ${process.env[name]}`);
+  }
+  return n;
+}
+
 export type WorkerEnv = {
   temporalAddress: string;
   temporalNamespace: string;
@@ -57,6 +67,8 @@ export type WorkerEnv = {
    * "No data to send" and fail the run.
    */
   sitespeedLighthouse: boolean;
+  /** Max activity attempts for runSitespeed (default 1). */
+  sitespeedMaxAttempts: number;
   graphiteHost?: string;
   graphitePort: string;
   graphiteNamespaceBase: string;
@@ -104,6 +116,8 @@ export function getEnv(): WorkerEnv {
       "SITESPEED_IMAGE",
       "sitespeedio/sitespeed.io:40.0.0-plus1",
     )!,
+    // Injected into the workflow bundle at worker start (default 1 = no retry).
+    sitespeedMaxAttempts: optionalInt("SITESPEED_MAX_ATTEMPTS", 1),
     demoAuthIdentifier: optional("DEMO_AUTH_IDENTIFIER"),
     demoAuthPassword: optional("DEMO_AUTH_PASSWORD"),
     s3Endpoint: optional("S3_ENDPOINT"),

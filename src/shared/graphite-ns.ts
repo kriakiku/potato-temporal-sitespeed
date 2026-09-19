@@ -4,6 +4,8 @@ export type MetricDimensions = {
   country: string;
   tier: string;
   cacheMode: string;
+  /** Workflow `direct` (lobby without tableId defaults to true for metrics). */
+  direct: boolean;
   isMirror: boolean;
   base?: string;
 };
@@ -15,7 +17,7 @@ function sanitizeSegment(value: string, fallback: string): string {
 
 /**
  * Graphite namespace:
- * `{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}`
+ * `{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}`
  */
 export function buildGraphiteNamespace(dims: MetricDimensions): string {
   const cleanBase = (dims.base ?? "sitespeed").replace(/\.+$/, "").trim() || "sitespeed";
@@ -23,21 +25,23 @@ export function buildGraphiteNamespace(dims: MetricDimensions): string {
   const country = sanitizeSegment(dims.country, "XX");
   const tier = sanitizeSegment(dims.tier, "typical");
   const cache = sanitizeSegment(dims.cacheMode, "cold");
+  const direct = dims.direct ? "true" : "false";
   const mirror = dims.isMirror ? "true" : "false";
-  return `${cleanBase}.${prefix}.${country}.${tier}.${cache}.${mirror}`;
+  return `${cleanBase}.${prefix}.${country}.${tier}.${cache}.${direct}.${mirror}`;
 }
 
 /**
  * sitespeed --slug / S3 path segment:
- * `{metricPrefix}-{country}-{tier}-{cacheMode}-{isMirror}`
+ * `{metricPrefix}-{country}-{tier}-{cacheMode}-{direct}-{isMirror}`
  */
 export function buildResultSlug(dims: Omit<MetricDimensions, "base">): string {
   const prefix = sanitizeSegment(dims.metricPrefix, "run");
   const country = sanitizeSegment(dims.country, "XX");
   const tier = sanitizeSegment(dims.tier, "typical");
   const cache = sanitizeSegment(dims.cacheMode, "cold");
+  const direct = dims.direct ? "true" : "false";
   const mirror = dims.isMirror ? "true" : "false";
-  return `${prefix}-${country}-${tier}-${cache}-${mirror}`;
+  return `${prefix}-${country}-${tier}-${cache}-${direct}-${mirror}`;
 }
 
 /** True when workflow tld differs from worker BASE_TLD (unset BASE_TLD → false). */

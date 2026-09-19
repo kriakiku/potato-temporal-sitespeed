@@ -14,7 +14,7 @@ export type SiteSpeedTestInput = {
   /** Host used in the entry URL (e.g. example.com) */
   tld: string;
   tableId?: string;
-  /** Only when tableId is set; default false */
+  /** Only meaningful with tableId; default false when tableId set, true for lobby metrics */
   direct?: boolean;
   browser?: string;
   iterations?: number;
@@ -40,6 +40,7 @@ export type SiteSpeedTestResult = {
   mode: "lobby" | "lobby-table" | "direct-table";
   metricPrefix: string;
   cacheMode: CacheMode;
+  direct: boolean;
   /** Derived: workflow tld !== worker BASE_TLD */
   isMirror: boolean;
   graphiteNamespace: string;

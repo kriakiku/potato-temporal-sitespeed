@@ -109,27 +109,34 @@ Optional local Temporal: `temporal server start-dev`
 | `tld` | yes | — | Host for auth/entry URL (e.g. `example.com`) |
 | `tier` | no | `typical` | `stable` \| `typical` \| `poor` |
 | `tableId` | no | — | When set, passed into session / enter-table |
-| `direct` | no | `false` if `tableId` set | Ignored without `tableId` |
+| `direct` | no | `true` without `tableId` (lobby metrics); `false` if `tableId` set | With `tableId`: `true` → enter-table. Lobby omits it → metrics segment `true` |
 | `browser` | no | `chrome` | sitespeed `-b` |
 | `iterations` | no | `3` | sitespeed `-n` |
 | `cacheMode` | no | `cold` | `cold` (clear cache) \| `warm` (`--preURL` then measure) |
+
+Cancel: Temporal workflow cancellation is supported — Potato containers are always stopped in a non-cancellable cleanup (`finally`), including when the run is cancelled mid-sitespeed.
 
 ### Entry URL
 
 1. `POST https://demo.{tld}/api/v2/auth/token`
 2. `POST https://demo.{tld}/api/go/v1/master-sessions/start` (Bearer)  
    body `{"extend":true}` or `{"tableId":"…","extend":true}`
-3. If `direct=true`: `POST https://lobby.{tld}/api/v1/enter-table`
+3. If `direct=true` **and** `tableId` is set: `POST https://lobby.{tld}/api/v1/enter-table`
 
 sitespeed opens the returned `frameUrl`.
 
 Graphite keys (`--graphite.addSlugToKey false` — no slug segment):
 
 ```text
-{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}.…
+{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}.…
 ```
 
-Example: `sitespeed.lobby.BD.typical.cold.false.pageSummary.…`
+Examples:
+
+- Lobby (no `tableId`, `direct` omitted → `true`): `sitespeed.lobby.BD.typical.cold.true.false.pageSummary.…`
+- Blackjack direct: `sitespeed.blackjack.BD.typical.warm.true.false.pageSummary.…`
+
+`direct` in the path is the workflow field (`true`/`false`). Lobby runs without a game usually omit it; the metrics segment then defaults to **`true`**. With `tableId` and no `direct`, the segment is **`false`** (lobby+table).
 
 `isMirror` is **derived** (not a workflow input): `true` when workflow `tld` ≠ worker `BASE_TLD` (e.g. `BASE_TLD=example.com` + `tld=neo.com` → `true`). If `BASE_TLD` is unset, `isMirror` is always `false`.
 
@@ -146,7 +153,8 @@ Create cascading **Query** variables (Graphite datasource). Refresh on dashboard
 | `country` | Query | `sitespeed.$metricPrefix.*` | e.g. `BD`, `DE` |
 | `tier` | Query | `sitespeed.$metricPrefix.$country.*` | `stable` / `typical` / `poor` |
 | `cacheMode` | Query | `sitespeed.$metricPrefix.$country.$tier.*` | `cold` / `warm` |
-| `isMirror` | Query | `sitespeed.$metricPrefix.$country.$tier.$cacheMode.*` | `true` / `false` |
+| `direct` | Query | `sitespeed.$metricPrefix.$country.$tier.$cacheMode.*` | `true` / `false` |
+| `isMirror` | Query | `sitespeed.$metricPrefix.$country.$tier.$cacheMode.$direct.*` | `true` / `false` |
 | `group` | Custom / Query | e.g. `lobby_example_com` | hostname, `.` → `_` (sitespeed still emits this) |
 | `page` | Custom | usually `lobby` (we set `--urlAlias` = metricPrefix) | or `_` |
 | `browser` | Custom | `chrome` | |
@@ -157,13 +165,13 @@ Create cascading **Query** variables (Graphite datasource). Refresh on dashboard
 **Panel metric path** (no `testname` / slug):
 
 ```text
-$base.$metricPrefix.$country.$tier.$cacheMode.$isMirror.pageSummary.$group.$page.$browser.$connectivity.…
+$base.$metricPrefix.$country.$tier.$cacheMode.$direct.$isMirror.pageSummary.$group.$page.$browser.$connectivity.…
 ```
 
 Example:
 
 ```text
-$base.$metricPrefix.$country.$tier.$cacheMode.$isMirror.pageSummary.$group.$page.$browser.$connectivity.timings.FirstVisualChange.median
+$base.$metricPrefix.$country.$tier.$cacheMode.$direct.$isMirror.pageSummary.$group.$page.$browser.$connectivity.timings.FirstVisualChange.median
 ```
 
 ### S3 result URLs for Grafana
@@ -171,7 +179,7 @@ $base.$metricPrefix.$country.$tier.$cacheMode.$isMirror.pageSummary.$group.$page
 sitespeed first uploads to a staging prefix `{slug}/{timestamp}/…` (slug still used only for that temp path). After the run the worker **promotes** clean latest assets to a prefix that matches the Graphite namespace, then **deletes** the timestamp folder:
 
 ```text
-{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}/
+{GRAPHITE_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}/
   chrome.native.png
   chrome.native.mp4
   index.html
@@ -182,21 +190,21 @@ Set `S3_RESULT_BASE_URL` to the public HTTP(S) origin for the bucket (Grafana `r
 **Latest screenshot / video / HTML:**
 
 ```text
-{S3_RESULT_BASE_URL}/{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}/{browser}.{connectivity}.png
-{S3_RESULT_BASE_URL}/{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}/{browser}.{connectivity}.mp4
-{S3_RESULT_BASE_URL}/{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}/index.html
+{S3_RESULT_BASE_URL}/{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}/{browser}.{connectivity}.png
+{S3_RESULT_BASE_URL}/{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}/{browser}.{connectivity}.mp4
+{S3_RESULT_BASE_URL}/{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}/index.html
 ```
 
 Example:
 
 ```text
-https://results.example.com/sitespeed.lobby.BD.typical.cold.false/chrome.native.png
+https://results.example.com/sitespeed.lobby.BD.typical.cold.true.false/chrome.native.png
 ```
 
 In Grafana:
 
 ```text
-$resulturl/$base.$metricPrefix.$country.$tier.$cacheMode.$isMirror/$browser.$connectivity.$screenshottype
+$resulturl/$base.$metricPrefix.$country.$tier.$cacheMode.$direct.$isMirror/$browser.$connectivity.$screenshottype
 ```
 
 Hash fragments like `#masterSessionId=…` are no longer left in latest filenames (staging may still contain them briefly before promote).
@@ -225,6 +233,7 @@ All config is process env (no `.env` file).
 | `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Graphite |
 | `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse available. Worker wraps `/start.sh`, installs Potato MITM CA (system + Chrome NSS), and passes `ignore-certificate-errors` + `disable-quic` (MITM often breaks QUIC → `chrome-error://chromewebdata/`) |
 | `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse. Empty LH→Graphite payloads are soft-warned (do not fail the run) |
+| `SITESPEED_MAX_ATTEMPTS` | `1` | Temporal activity retries for `runSitespeed` only (default **1** = no retry). Injected into the workflow bundle at worker start |
 | `DEMO_AUTH_IDENTIFIER` | — | Required for tests |
 | `DEMO_AUTH_PASSWORD` | — | Required for tests |
 | `S3_BUCKET` / `S3_KEY` / `S3_SECRET` | — | Upload when all three set |

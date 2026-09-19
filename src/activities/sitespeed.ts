@@ -31,6 +31,8 @@ export type RunSitespeedInput = {
   browser: string;
   iterations: number;
   cacheMode: CacheMode;
+  /** Folded into Graphite/S3 dimensions */
+  direct: boolean;
 };
 
 export type RunSitespeedResult = {
@@ -134,6 +136,7 @@ export async function runSitespeed(
     country: input.country,
     tier: input.tier,
     cacheMode: input.cacheMode,
+    direct: input.direct,
     isMirror,
     base: env.graphiteNamespaceBase,
   };
@@ -211,6 +214,7 @@ export async function runSitespeed(
     tier: input.tier,
     isMirror,
     tld: input.tld,
+    direct: input.direct,
     deviceName: CHROME_DEVICE_NAME,
   });
 

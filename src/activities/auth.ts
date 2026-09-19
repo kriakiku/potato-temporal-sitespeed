@@ -81,10 +81,6 @@ export async function resolveEntryUrl(
   const password = required("DEMO_AUTH_PASSWORD");
   const tld = input.tld.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
-  if (input.direct && !input.tableId) {
-    throw new Error("direct=true requires tableId");
-  }
-
   const auth = await postJson<AuthTokenResponse>(
     `https://demo.${tld}/api/v2/auth/token`,
     { password, identifier },
@@ -120,7 +116,7 @@ export async function resolveEntryUrl(
       throw new Error("enter-table response missing frameUrl");
     }
     return {
-      frameUrl: entered.frameUrl,
+      frameUrl: normalizeFrameUrl(entered.frameUrl),
       msid,
       mode: "direct-table",
     };
@@ -131,8 +127,21 @@ export async function resolveEntryUrl(
   }
 
   return {
-    frameUrl: session.frameUrl,
+    frameUrl: normalizeFrameUrl(session.frameUrl),
     msid,
     mode: input.tableId ? "lobby-table" : "lobby",
   };
+}
+
+/** Drop redundant `:443` on https URLs (enter-table sometimes includes it). */
+export function normalizeFrameUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.protocol === "https:" && u.port === "443") {
+      u.port = "";
+    }
+    return u.toString();
+  } catch {
+    return url;
+  }
 }

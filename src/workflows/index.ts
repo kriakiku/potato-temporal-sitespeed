@@ -1,9 +1,11 @@
 import {
+  CancellationScope,
   proxyActivities,
   workflowInfo,
 } from "@temporalio/workflow";
 import type * as activities from "../activities/index";
 import { normalizeSiteSpeedInput } from "../shared/entry-url";
+import { sitespeedActivityMaxAttempts } from "../shared/sitespeed-attempts";
 import type {
   PotatoRefreshResult,
   SiteSpeedTestInput,
@@ -32,7 +34,8 @@ const { runSitespeed } = proxyActivities<typeof activities>({
   startToCloseTimeout: "90 minutes",
   heartbeatTimeout: "2 minutes",
   retry: {
-    maximumAttempts: 2,
+    // Default 1 — no retries on sitespeed.io (SITESPEED_MAX_ATTEMPTS).
+    maximumAttempts: sitespeedActivityMaxAttempts(),
     initialInterval: "10s",
     backoffCoefficient: 2,
   },
@@ -73,6 +76,7 @@ export async function siteSpeedTestWorkflow(
       browser: normalized.browser,
       iterations: normalized.iterations,
       cacheMode: normalized.cacheMode,
+      direct: normalized.direct,
     });
 
     return {
@@ -81,13 +85,17 @@ export async function siteSpeedTestWorkflow(
       mode: entry.mode,
       metricPrefix: normalized.metricPrefix,
       cacheMode: normalized.cacheMode,
+      direct: normalized.direct,
       isMirror: result.isMirror,
       graphiteNamespace: result.graphiteNamespace,
       potatoContainer: potato.containerName,
       sitespeedExitCode: result.exitCode,
     };
   } finally {
-    await stopPotato(potato);
+    // Always tear down Potato even when the workflow is cancelled mid-run.
+    await CancellationScope.nonCancellable(async () => {
+      await stopPotato(potato);
+    });
   }
 }
 
@@ -114,6 +122,8 @@ export async function potatoRefreshWorkflow(): Promise<PotatoRefreshResult> {
       baselineProbedAt: baseline.probedAt,
     };
   } finally {
-    await stopPotato(potato);
+    await CancellationScope.nonCancellable(async () => {
+      await stopPotato(potato);
+    });
   }
 }

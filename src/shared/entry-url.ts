@@ -35,11 +35,12 @@ export function normalizeSiteSpeedInput(
   const tld = tldRaw.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
   const tableId = input.tableId?.trim() || undefined;
-  const direct = tableId ? (input.direct ?? false) : false;
-
-  if (direct && !tableId) {
+  // Lobby (no tableId): metrics default direct=true. With tableId: default false.
+  // Explicit direct=true without tableId is invalid (enter-table needs tableId).
+  if (input.direct === true && !tableId) {
     throw new Error("direct=true requires tableId");
   }
+  const direct = tableId ? (input.direct ?? false) : (input.direct ?? true);
 
   const cacheMode = input.cacheMode ?? DEFAULT_CACHE_MODE;
   if (cacheMode !== "cold" && cacheMode !== "warm") {
