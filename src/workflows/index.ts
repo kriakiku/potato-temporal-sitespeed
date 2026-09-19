@@ -3,10 +3,7 @@ import {
   workflowInfo,
 } from "@temporalio/workflow";
 import type * as activities from "../activities/index";
-import {
-  buildEntryUrl,
-  normalizeSiteSpeedInput,
-} from "../shared/entry-url";
+import { normalizeSiteSpeedInput } from "../shared/entry-url";
 import type {
   PotatoRefreshResult,
   SiteSpeedTestInput,
@@ -20,6 +17,7 @@ const {
   stopPotato,
   refreshPotatoCatalog,
   refreshPotatoBaseline,
+  resolveEntryUrl,
 } = proxyActivities<typeof activities>({
   startToCloseTimeout: "30 minutes",
   heartbeatTimeout: "2 minutes",
@@ -44,8 +42,14 @@ export async function siteSpeedTestWorkflow(
   input: SiteSpeedTestInput,
 ): Promise<SiteSpeedTestResult> {
   const normalized = normalizeSiteSpeedInput(input);
-  const url = buildEntryUrl(normalized);
   const { runId } = workflowInfo();
+
+  // Auth + session URL resolution runs on the worker host (not through PotatoNetwork).
+  const entry = await resolveEntryUrl({
+    tld: normalized.tld,
+    tableId: normalized.tableId,
+    direct: normalized.direct,
+  });
 
   await ensurePotatoVolume();
 
@@ -61,14 +65,16 @@ export async function siteSpeedTestWorkflow(
 
     const result = await runSitespeed({
       potatoContainer: potato.containerName,
-      url,
+      url: entry.frameUrl,
       metricPrefix: normalized.metricPrefix,
       browser: normalized.browser,
       iterations: normalized.iterations,
     });
 
     return {
-      url,
+      url: entry.frameUrl,
+      msid: entry.msid,
+      mode: entry.mode,
       metricPrefix: normalized.metricPrefix,
       graphiteNamespace: result.graphiteNamespace,
       potatoContainer: potato.containerName,

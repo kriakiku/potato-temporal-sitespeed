@@ -82,10 +82,15 @@ bun run start-test -- \
 
 ### Entry URL
 
-Built by Temporal (no browser login script):
+Resolved by a Temporal activity **before** PotatoNetwork/sitespeed start (auth traffic is not shaped):
 
-- without `tableId`: `https://{tld}/`
-- with `tableId`: `https://{tld}/?tableId={tableId}&direct={true\|false}`
+1. `POST https://demo.{tld}/api/v2/auth/token` with `DEMO_AUTH_IDENTIFIER` / `DEMO_AUTH_PASSWORD`
+2. `POST https://demo.{tld}/api/go/v1/master-sessions/start` with Bearer token  
+   - body `{"extend":true}` or `{"tableId":"…","extend":true}`
+3. If `direct=true` (requires `tableId`):  
+   `POST https://lobby.{tld}/api/v1/enter-table` with `{sessionId: msid, tableId}`
+
+sitespeed opens the returned `frameUrl`.
 
 ### Metric separation
 
@@ -131,6 +136,13 @@ All configuration is via **process environment variables** (no `.env` file).
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:38.0.0` | Pin a tag in production |
+
+### Demo auth (entry URL)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DEMO_AUTH_IDENTIFIER` | yes (for tests) | Login / email for `demo.{tld}` token API |
+| `DEMO_AUTH_PASSWORD` | yes (for tests) | Password for token API |
 
 ### S3
 

@@ -30,6 +30,8 @@ export type NormalizedSiteSpeedTestInput = {
 
 export type SiteSpeedTestResult = {
   url: string;
+  msid: string;
+  mode: "lobby" | "lobby-table" | "direct-table";
   metricPrefix: string;
   graphiteNamespace: string;
   potatoContainer: string;
