@@ -109,7 +109,72 @@ Example: `lobby-BD-typical-cold-false`
 
 Official sitespeed Grafana dashboards expect a shorter namespace (`base.path.slug`). This layout needs custom panels or Graphite wildcards.
 
-### S3 result URLs for Grafana
+### Grafana dashboard variables (filters)
+
+With `--graphite.addSlugToKey true`, a metric path looks like:
+
+```text
+{base}.{metricPrefix}.{country}.{tier}.{cacheMode}.{isMirror}.{slug}.…
+```
+
+Example:
+
+```text
+sitespeed.lobby.BD.typical.cold.false.lobby-BD-typical-cold-false.pageSummary.…
+```
+
+Create these **Custom / Query** variables on the dashboard (order matters for cascading). Use your Graphite datasource. Set each Query variable to refresh **On dashboard load** (and **On time range change** if you like).
+
+| Variable | Type | Query / values | Notes |
+|----------|------|----------------|-------|
+| `base` | Constant | `sitespeed` | Same as `GRAPHITE_NAMESPACE_BASE` |
+| `metricPrefix` | Query | `sitespeed.*` | e.g. `lobby`, `table` |
+| `country` | Query | `sitespeed.$metricPrefix.*` | e.g. `BD`, `DE` |
+| `tier` | Query | `sitespeed.$metricPrefix.$country.*` | `stable` / `typical` / `poor` |
+| `cacheMode` | Query | `sitespeed.$metricPrefix.$country.$tier.*` | `cold` / `warm` |
+| `isMirror` | Query | `sitespeed.$metricPrefix.$country.$tier.$cacheMode.*` | `true` / `false` |
+| `testname` | Query | `sitespeed.$metricPrefix.$country.$tier.$cacheMode.$isMirror.*` | = slug, e.g. `lobby-BD-typical-cold-false` |
+| `group` | Query | (see below) | hostname, `.` → `_` |
+| `page` | Query | (see below) | path, `/` → `_`; root → `_` |
+| `browser` | Custom | `chrome` | or Query under the path |
+| `connectivity` | Custom | `native` | always `native` for this worker |
+| `resulturl` | Constant | your `S3_RESULT_BASE_URL` | no trailing slash |
+| `screenshottype` | Constant | `png` | |
+
+**`group` / `page` after the slug** (sitespeed URL keys). Exact child names depend on your Graphite layout; start from:
+
+```text
+sitespeed.$metricPrefix.$country.$tier.$cacheMode.$isMirror.$testname.*
+```
+
+Drill until you see segments like `lobby_example_com` (`group`) and `_` (`page` for `/`). You can also set them as **Custom** once you know the values from one successful run.
+
+**Panel / annotation metric prefix** — replace the stock sitespeed pattern `$base.$path.$testname` with:
+
+```text
+$base.$metricPrefix.$country.$tier.$cacheMode.$isMirror.$testname
+```
+
+Example Graphite target:
+
+```text
+$base.$metricPrefix.$country.$tier.$cacheMode.$isMirror.$testname.pageSummary.$group.$page.$browser.$connectivity.timings.FirstVisualChange.median
+```
+
+**S3 “latest” assets** use the same filters:
+
+```text
+$resulturl/$testname/$group.$page.$browser.$connectivity.$screenshottype
+```
+
+**Tips**
+
+- Enable **Multi-value** + **Include All** on `country` / `tier` / `cacheMode` / `isMirror` if you want overlays; use Graphite `*{…}*` or Grafana’s multi-value expansion carefully (All → `*`).
+- Keep `testname` single-value when linking screenshots (one slug → one latest file).
+- If a Query variable is empty, no data has been written under that branch yet — run a matching workflow first.
+- Stock “Page metrics” dashboards from sitespeed assume only `$base.$path.$testname`. Either edit every panel path as above, or fork the JSON once and search-replace.
+
+## Environment
 
 sitespeed uploads HTML/screenshots/video under the **slug**, then a timestamp folder. The worker also sets `--copyLatestFilesToBase true` so Grafana can load the **latest** assets without knowing the timestamp.
 
