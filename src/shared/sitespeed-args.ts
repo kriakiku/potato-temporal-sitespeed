@@ -95,10 +95,8 @@ export function buildSitespeedBrowserArgs(
     "native",
     "--browsertime.connectivity.engine",
     "external",
-    // Lobby/game URLs use #masterSessionId=… — SPA wait; alias keeps names clean
+    // Lobby/game URLs use #masterSessionId=… — SPA wait
     "--spa",
-    "--urlAlias",
-    input.metricPrefix,
     // Potato MITM: Chrome error page without these
     "--browsertime.chrome.args",
     "ignore-certificate-errors",
@@ -118,6 +116,12 @@ export function buildSitespeedBrowserArgs(
     "--browsertime.timeouts.elementWait",
     "60000",
   );
+
+  // --urlAlias must match getURLs() count. Journey/multi scripts yield 0 HTTP
+  // URLs there, so CLI alias mismatches; measure.start(alias) sets the name.
+  if (!input.multiScriptPath) {
+    cmd.push("--urlAlias", input.metricPrefix);
+  }
 
   if (input.chromeUserDataDir) {
     cmd.push(

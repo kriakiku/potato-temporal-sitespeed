@@ -43,8 +43,22 @@ describe("buildSitespeedBrowserArgs", () => {
     expect(args).not.toContain("--browsertime.cacheClearRaw");
     expect(args).toContain("--browsertime.timeouts.elementWait");
     expect(args).toContain("60000");
+    expect(args).not.toContain("--urlAlias");
     expect(args).not.toContain("--browsertime.chrome.CPUThrottlingRate");
     expect(args).toContain(`user-data-dir=${CONTAINER_CHROME_PROFILE}`);
+  });
+
+  test("plain URL keeps urlAlias", () => {
+    const args = buildSitespeedBrowserArgs({
+      browser: "chrome",
+      slug: "test",
+      metricPrefix: "lobby",
+      cacheMode: "cold",
+      url: "https://example.com/",
+    });
+    const i = args.indexOf("--urlAlias");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args[i + 1]).toBe("lobby");
   });
 
   test("cpuThrottlingRate adds Chrome CPUThrottlingRate", () => {
