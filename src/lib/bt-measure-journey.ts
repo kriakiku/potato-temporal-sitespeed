@@ -1,7 +1,12 @@
 /**
- * Generate a browsertime multi/journey script: navigate + measure, then if
+ * Generate a browsertime multi/journey script: open URL, then if
  * `[data-test-id="fullScreen"]` is present, Selenium Actions-tap the viewport center.
  * Presence check only — click is not targeted at the element.
+ *
+ * Important: do NOT use `commands.navigate(url)` before the tap. That API always
+ * runs pageCompleteCheck before returning, which can take a long time while the
+ * marker is already on screen. Open with raw `driver.get`, gate+tap, then
+ * `wait.byPageToComplete()` so metrics still settle before stop.
  *
  * Warm cache is handled outside this script (second sitespeed run with a shared
  * Chrome user-data-dir after POST /v1/stats/reset).
@@ -21,15 +26,21 @@ export function buildMeasureJourneyScript(input: MeasureJourneyInput): string {
   return `/**
  * Auto-generated browsertime journey (do not edit by hand).
  * Measure ${JSON.stringify(input.alias)}; if ${FULLSCREEN_SELECTOR} appears, Actions-tap viewport center.
+ * Opens via driver.get so the gate runs before pageCompleteCheck.
  */
 module.exports = async function (context, commands) {
   var url = ${JSON.stringify(input.url)};
   var alias = ${JSON.stringify(input.alias)};
   var selector = ${JSON.stringify(FULLSCREEN_SELECTOR)};
   var fullscreenWaitMs = ${waitMs};
+  var driver = context.selenium && context.selenium.driver;
+  if (!driver || typeof driver.get !== "function") {
+    throw new Error("context.selenium.driver unavailable");
+  }
 
   await commands.measure.start(alias);
-  await commands.navigate(url);
+  // Skip commands.navigate — it blocks on pageCompleteCheck before we can tap.
+  await driver.get(url);
 
   try {
     // Gate only: element must appear; we do not click it.
@@ -80,6 +91,11 @@ module.exports = async function (context, commands) {
         (e && e.message ? e.message : String(e)) +
         "; continuing without tap"
     );
+  }
+
+  // Settle configured pageCompleteCheck after the tap window.
+  if (commands.wait && typeof commands.wait.byPageToComplete === "function") {
+    await commands.wait.byPageToComplete();
   }
 
   return commands.measure.stop();

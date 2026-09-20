@@ -18,7 +18,7 @@ Treat this repo as a reference integration, not a product.
 1. Resolves an entry URL via demo auth APIs (`demo.{tld}` / optional `lobby.{tld}`) **before** Potato starts (auth is not shaped)
 2. Ensures a shared volume for Potato catalog / baseline / MITM CA
 3. Boots PotatoNetwork with `country` + `tier` from the workflow input (crons off)
-4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` once (`-n 1`) with `--network container:<potato>`, bind-mounted result dir, `--plugins.add analysisstorer`, `--video`, `--browsertime.videoParams.addTimer true`, browsertime `--script` for first-iframe timing, and a **multi journey** that taps `[data-test-id="fullScreen"]` when present. For `cacheMode=warm`, runs a lighter warmup sitespeed first (shared Chrome `user-data-dir`), then `POST /v1/stats/reset`, then the measure run
+4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` once (`-n 1`) with `--network container:<potato>`, bind-mounted result dir, `--plugins.add analysisstorer`, `--video`, `--browsertime.videoParams.addTimer true`, browsertime `--script` for first-iframe timing, and a **multi journey** that taps `[data-test-id="fullScreen"]` when present (gate runs before pageCompleteCheck). For `cacheMode=warm`, runs a lighter warmup sitespeed first (shared Chrome `user-data-dir`), then `POST /v1/stats/reset`, then the measure run
 5. Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), `--cpu` / `--sustainable.enable` / `--axe.enable`, optional `cpuThrottlingRate`, `cacheMode` cold|warm
 6. Worker post-process: Influx metrics write + optional S3 upload (video keeps browsertime timer)
 7. Tears down the Potato container
@@ -252,7 +252,7 @@ Browsertime’s built-in timer is **on** (`--browsertime.videoParams.addTimer tr
 
 ### Fullscreen tap
 
-Each run stages a browsertime **multi journey** (`bt-measure-journey.js`, run with `--multi`) that navigates the entry URL under `commands.measure`, waits up to 10s for `[data-test-id="fullScreen"]` (presence gate only), then **Selenium Actions-taps the viewport center** if the marker appeared (no-op if missing). Warm cache is a separate sitespeed pass with a shared Chrome profile (see above), not an in-script pre-navigate.
+Each run stages a browsertime **multi journey** (`bt-measure-journey.js`, run with `--multi`) that opens the entry URL under `commands.measure` via raw Selenium `driver.get` (not `commands.navigate`, which would block on `pageCompleteCheck` first), waits up to 10s for `[data-test-id="fullScreen"]` (presence gate only), **Actions-taps the viewport center** if the marker appeared, then `wait.byPageToComplete()` before `measure.stop`. Warm cache is a separate sitespeed pass with a shared Chrome profile (see above), not an in-script pre-navigate.
 
 Unset `INFLUX_WRITE_URL` → metrics emit is skipped (logged once).
 

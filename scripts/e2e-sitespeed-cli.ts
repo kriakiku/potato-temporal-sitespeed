@@ -2,18 +2,22 @@
  * CI smoke: stage journey + first-iframe like production, run the real
  * sitespeed.io image with buildSitespeedBrowserArgs (incl. --multi).
  * No Potato, no live session — catches startsWith / missing-script regressions.
+ * Default URL includes a `#…` fragment (auth-style hash, not SPA routing) so we
+ * verify the journey keeps the fragment intact through JSON embedding + driver.get.
  *
  *   bun run e2e:sitespeed-cli
  *
  * Optional: SITESPEED_IMAGE, CONTAINER_ENGINE=docker|podman, E2E_OUT=.e2e-cli-out
  */
-import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildMeasureJourneyScript } from "../src/lib/bt-measure-journey";
 import { buildSitespeedBrowserArgs } from "../src/shared/sitespeed-args";
 
-const DEFAULT_URL = "https://kriakiku.github.io/potato-network/";
+/** Docs page + synthetic auth hash — must survive into bt-measure-journey.js. */
+const DEFAULT_URL =
+  "https://kriakiku.github.io/potato-network/#masterSessionId=e2e-ci-hash-check";
 const DEFAULT_IMAGE = "sitespeedio/sitespeed.io:40.0.0-plus1";
 const HOST_FIRST_IFRAME = fileURLToPath(
   new URL("./bt-first-iframe.js", import.meta.url),
@@ -83,8 +87,9 @@ async function main(): Promise<void> {
   await mkdir(outDir, { recursive: true });
 
   await copyFile(HOST_FIRST_IFRAME, join(outDir, "bt-first-iframe.js"));
+  const journeyPath = join(outDir, "bt-measure-journey.js");
   await writeFile(
-    join(outDir, "bt-measure-journey.js"),
+    journeyPath,
     buildMeasureJourneyScript({
       url,
       alias: "ci",
@@ -93,6 +98,24 @@ async function main(): Promise<void> {
     }),
     "utf8",
   );
+
+  // Hash fragments must remain in the staged journey (JSON.stringify + driver.get).
+  const journeySrc = await readFile(journeyPath, "utf8");
+  if (!url.includes("#")) {
+    fail(
+      `e2e URL must include a #hash fragment to guard auth-style URLs (got: ${url})`,
+    );
+  }
+  const hashPart = url.slice(url.indexOf("#"));
+  if (!journeySrc.includes(JSON.stringify(url))) {
+    fail(
+      `journey script lost full URL with hash (expected JSON ${JSON.stringify(url)})`,
+    );
+  }
+  if (!journeySrc.includes(hashPart)) {
+    fail(`journey script missing hash fragment ${hashPart}`);
+  }
+  console.log(`Hash OK: journey embeds ${hashPart}`);
 
   const args = buildSitespeedBrowserArgs({
     browser: "chrome",
@@ -114,8 +137,7 @@ async function main(): Promise<void> {
     (a) =>
       a !== "--cpu" &&
       a !== "--sustainable.enable" &&
-      a !== "--axe.enable" &&
-      a !== "--spa",
+      a !== "--axe.enable",
   );
   if (!slim.includes("--multi")) {
     fail("buildSitespeedBrowserArgs must include --multi for journey scripts");

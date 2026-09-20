@@ -23,16 +23,29 @@ describe("buildMeasureJourneyScript", () => {
     expect(src).not.toContain("if (warm)");
   });
 
-  test("always starts measure then navigates once", () => {
+  test("opens via driver.get before gate; pageComplete after tap", () => {
     const src = buildMeasureJourneyScript({
       url: "https://example.com/",
       alias: "table",
     });
     expect(src).toContain("await commands.measure.start(alias);");
-    expect(src).toContain("await commands.navigate(url);");
+    expect(src).toContain("await driver.get(url);");
+    expect(src).not.toContain("await commands.navigate");
+    expect(src).toContain("byPageToComplete");
     expect(src).toContain("var fullscreenWaitMs = 10000;");
-    // No pre-measure warm navigate
-    const beforeMeasure = src.split("measure.start")[0] ?? "";
-    expect(beforeMeasure).not.toContain("commands.navigate");
+    const afterGet = src.split("driver.get(url)")[1] ?? "";
+    const gateIdx = afterGet.indexOf("commands.wait");
+    const completeIdx = afterGet.indexOf("byPageToComplete");
+    expect(gateIdx).toBeGreaterThanOrEqual(0);
+    expect(completeIdx).toBeGreaterThan(gateIdx);
+  });
+
+  test("preserves auth-style #hash in embedded URL for driver.get", () => {
+    const url =
+      "https://example.com/table?language=en#masterSessionId=bfbe3df9a10e473a";
+    const src = buildMeasureJourneyScript({ url, alias: "lobby" });
+    expect(src).toContain(`var url = ${JSON.stringify(url)};`);
+    expect(src).toContain("#masterSessionId=bfbe3df9a10e473a");
+    expect(src).toContain("await driver.get(url);");
   });
 });

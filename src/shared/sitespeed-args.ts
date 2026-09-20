@@ -95,8 +95,6 @@ export function buildSitespeedBrowserArgs(
     "native",
     "--browsertime.connectivity.engine",
     "external",
-    // Lobby/game URLs use #masterSessionId=… — SPA wait
-    "--spa",
     // Potato MITM: Chrome error page without these
     "--browsertime.chrome.args",
     "ignore-certificate-errors",
