@@ -1,45 +1,48 @@
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { heartbeat, log } from "@temporalio/activity";
+import {
+  CancelledFailure,
+  Context,
+  heartbeat,
+  log,
+} from "@temporalio/activity";
 import {
   getPotatoBaseline,
   getPotatoCatalogCountry,
   getPotatoProfile,
   getPotatoStats,
-  resetPotatoStats,
-  type PotatoStatsRequest,
+  type PotatoBaseline,
+  type PotatoProfile,
   type PotatoStatsSnapshot,
 } from "./potato";
 import { assertExportConfig, getEnv } from "../lib/env";
 import { buildMeasureJourneyScript } from "../lib/bt-measure-journey";
-import {
-  scrubHostForMetrics,
-  scrubPathForMetrics,
-} from "../lib/metric-scrub";
+import { buildInfluxPoints, type OverlayInfluxMeta } from "../lib/influx-points";
 import {
   buildOverlayTimeline,
   lastN,
   OVERLAY_SLOT_LIMIT,
+  type OverlayTimeline,
 } from "../lib/overlay-timeline";
 import {
   burnOverlayOntoVideo,
   overlayWorkDirFor,
 } from "../lib/overlay-ffmpeg";
+import { emitInfluxWrite } from "../lib/influx";
+import { PodmanCancelledError, podman } from "../lib/podman";
 import { uploadLocalSitespeedArtifacts } from "../lib/s3-latest";
-import { podman } from "../lib/podman";
 import {
   emptySitespeedMetricsBundle,
   findLocalAsset,
   loadSitespeedMetrics,
   type SitespeedMetricsBundle,
-  type SitespeedTimingFields,
-  type TaggedMetricPoint,
 } from "../lib/sitespeed-json";
 import {
-  emitInfluxWrite,
-  type InfluxPoint,
-} from "../lib/influx";
+  potatoEnrichmentPath,
+  potatoMetricsPath,
+  potatoOverlayResultPath,
+} from "../lib/sitespeed-run-paths";
 import {
   ensureUrl2GreenFile,
   resolveUrl2GreenHostPath,
@@ -57,9 +60,14 @@ import {
   CONTAINER_CHROME_PROFILE,
 } from "../shared/sitespeed-args";
 import { sitespeedPotatoEntrypoint } from "../shared/sitespeed-entrypoint";
-import type { CacheMode, PotatoTier } from "../shared/types";
+import type {
+  CacheMode,
+  PotatoTier,
+  SitespeedRunHandle,
+} from "../shared/types";
 
 export { CHROME_DEVICE_NAME } from "../shared/sitespeed-args";
+export { buildInfluxPoints } from "../lib/influx-points";
 
 const CONTAINER_OUTPUT = "/sitespeed.io/results";
 const CONTAINER_FIRST_IFRAME_SCRIPT = "/sitespeed.io/bt-first-iframe.js";
@@ -68,36 +76,34 @@ const HOST_FIRST_IFRAME_SCRIPT = fileURLToPath(
   new URL("../../scripts/bt-first-iframe.js", import.meta.url),
 );
 
-export type RunSitespeedInput = {
+export type PrepareSitespeedRunInput = {
   potatoContainer: string;
-  /** Potato API base (host-published :7783) for profile/stats enrichment */
   potatoApiBaseUrl: string;
   url: string;
   metricPrefix: string;
   country: string;
   tier: PotatoTier;
-  /** Workflow tld — isMirror + host scrub → `{tld}` in Telegraf tags */
   tld: string;
   browser: string;
   cacheMode: CacheMode;
-  /** Folded into artifact namespace / Telegraf tags */
   direct: boolean;
-  /** Chrome CPUThrottlingRate when set (integer ≥ 1). */
   cpuThrottlingRate?: number;
 };
 
-export type RunSitespeedResult = {
-  exitCode: number;
-  /** Dotted prefix for S3 / Grafana (`sitespeed.lobby.BD…`) */
-  artifactNamespace: string;
-  /** @deprecated alias of artifactNamespace */
-  graphiteNamespace: string;
-  slug: string;
-  isMirror: boolean;
-  resultDir: string;
-  s3Keys?: string[];
-  stdoutTail: string;
-  stderrTail: string;
+type PotatoEnrichmentDisk = {
+  profile: PotatoProfile;
+  baseline: PotatoBaseline;
+  stats: PotatoStatsSnapshot;
+  catalogCfRtt?: number;
+  catalogNearestAwsRtt?: number;
+  nearestAws?: string;
+  overlayTimeline: OverlayTimeline;
+  overlayMeta: OverlayInfluxMeta;
+};
+
+type PotatoOverlayResultDisk = {
+  burned: boolean;
+  potatoMp4?: string;
 };
 
 function tail(text: string, max = 4000): string {
@@ -145,264 +151,117 @@ export function summarizeSitespeedFailure(
   return `${msg.slice(0, FAILURE_MESSAGE_MAX - 1)}…`;
 }
 
-function sitespeedEntrypointCmd(args: string[]): {
-  entrypoint: string[];
-  cmd: string[];
-} {
-  return sitespeedPotatoEntrypoint(args);
+function activityCancelSignal(): AbortSignal {
+  return Context.current().cancellationSignal;
 }
 
-function avgLatency(sumMs: number, count: number): number | undefined {
-  if (count <= 0) return undefined;
-  return sumMs / count;
+function rethrowIfCancelled(err: unknown): never {
+  if (err instanceof CancelledFailure) throw err;
+  if (err instanceof PodmanCancelledError) {
+    throw new CancelledFailure(err.message);
+  }
+  if (Context.current().cancellationSignal.aborted) {
+    throw new CancelledFailure(
+      err instanceof Error ? err.message : "activity cancelled",
+    );
+  }
+  throw err;
 }
 
-function scrubDomainTag(domain: string, workflowTld: string): string {
-  return scrubHostForMetrics(domain, workflowTld);
+async function readJsonFile<T>(path: string): Promise<T> {
+  return JSON.parse(await readFile(path, "utf8")) as T;
 }
 
-function requestTags(
-  base: Record<string, string>,
-  req: PotatoStatsRequest,
-  workflowTld: string,
-): Record<string, string> {
-  const out: Record<string, string> = {
-    ...base,
-    host: scrubHostForMetrics(req.host, workflowTld),
-    path: scrubPathForMetrics(req.path),
-  };
-  if (req.method) out.method = req.method.toUpperCase();
-  return out;
+async function writeJsonFile(path: string, value: unknown): Promise<void> {
+  await writeFile(path, JSON.stringify(value), "utf8");
 }
 
-function latencyFields(
-  req: PotatoStatsRequest,
-): Record<string, number | undefined> {
-  return {
-    count: req.count,
-    started: req.started,
-    errorCount: req.errorCount,
-    latencySumMs: req.latencyMs.sumMs,
-    latencyMinMs: req.latencyMs.minMs,
-    latencyMaxMs: req.latencyMs.maxMs,
-    latencyAvgMs: avgLatency(req.latencyMs.sumMs, req.count),
-  };
-}
+async function runSitespeedContainer(opts: {
+  handle: SitespeedRunHandle;
+  phase: "warmup" | "measure";
+  outputFolder: string;
+  video: boolean;
+  removeLighthouse: boolean;
+  clearCache: boolean;
+  chromeUserDataDir?: string;
+}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const env = getEnv();
+  const { handle } = opts;
+  const url2GreenGz = resolveUrl2GreenHostPath(
+    env.sitespeedResultsDir,
+    env.sitespeedUrl2GreenPath,
+  );
+  const url2GreenBind = sitespeedUrl2GreenBind(url2GreenGz);
 
-export function buildInfluxPoints(input: {
-  tags: Record<string, string>;
-  workflowTld: string;
-  browsertime: SitespeedTimingFields;
-  browsertimeTagged?: TaggedMetricPoint[];
-  pagexray?: SitespeedTimingFields;
-  pagexrayTagged?: TaggedMetricPoint[];
-  coach?: SitespeedTimingFields;
-  axe?: SitespeedTimingFields;
-  lighthouse?: SitespeedTimingFields;
-  sustainable?: SitespeedTimingFields;
-  thirdparty?: SitespeedTimingFields;
-  thirdpartyTagged?: TaggedMetricPoint[];
-  profile: Awaited<ReturnType<typeof getPotatoProfile>>;
-  baseline: Awaited<ReturnType<typeof getPotatoBaseline>>;
-  catalogCfRtt?: number;
-  catalogNearestAwsRtt?: number;
-  nearestAws?: string;
-  stats: PotatoStatsSnapshot;
-  overlay?: {
-    wsMarkers: number;
-    apiMarkers: number;
-    wsShown: number;
-    apiShown: number;
-    firstIframeMs: number;
-    burned: boolean;
-  };
-}): InfluxPoint[] {
-  const points: InfluxPoint[] = [];
-  const { tags, workflowTld } = input;
-
-  const pushFlat = (
-    measurement: string,
-    fields: SitespeedTimingFields | undefined,
-  ) => {
-    if (!fields || Object.keys(fields).length === 0) return;
-    points.push({ measurement, tags, fields });
-  };
-
-  const pushTagged = (
-    measurement: string,
-    tagged: TaggedMetricPoint[] | undefined,
-  ) => {
-    if (!tagged?.length) return;
-    for (const p of tagged) {
-      if (Object.keys(p.fields).length === 0) continue;
-      points.push({
-        measurement,
-        tags: { ...tags, ...p.tags },
-        fields: p.fields,
-      });
-    }
-  };
-
-  pushFlat("potato_browsertime", input.browsertime);
-  pushTagged("potato_browsertime", input.browsertimeTagged);
-  pushFlat("potato_pagexray", input.pagexray);
-  pushTagged("potato_pagexray", input.pagexrayTagged);
-  pushFlat("potato_coach", input.coach);
-  pushFlat("potato_axe", input.axe);
-  pushFlat("potato_lighthouse", input.lighthouse);
-  pushFlat("potato_sustainable", input.sustainable);
-  pushFlat("potato_thirdparty", input.thirdparty);
-  pushTagged("potato_thirdparty", input.thirdpartyTagged);
-
-  const profileFields: Record<string, number | boolean | undefined> = {
-    delayMs: input.profile.delayMs,
-    downloadMbps: input.profile.downloadMbps,
-    uploadMbps: input.profile.uploadMbps,
-    lossPercent: input.profile.lossPercent,
-    emulationLimited: input.profile.emulationLimited ? true : false,
-    passthrough: input.profile.passthrough ? true : false,
-    hostCfRttMs: input.baseline.hostRtt?.cf,
-    cfRttMs: input.catalogCfRtt,
-    nearestAwsRttMs: input.catalogNearestAwsRtt,
-  };
-  points.push({
-    measurement: "potato_profile",
-    tags: {
-      ...tags,
-      ...(input.nearestAws ? { nearestAws: input.nearestAws } : {}),
-    },
-    fields: profileFields,
+  const cmd = buildSitespeedBrowserArgs({
+    browser: handle.browser,
+    slug: opts.phase === "warmup" ? `${handle.slug}-warmup` : handle.slug,
+    metricPrefix: handle.metricPrefix,
+    cacheMode: handle.cacheMode,
+    url: handle.url,
+    outputFolder: opts.outputFolder,
+    scriptPath: CONTAINER_FIRST_IFRAME_SCRIPT,
+    multiScriptPath: CONTAINER_MEASURE_JOURNEY,
+    removeLighthouse: opts.removeLighthouse,
+    removeGpsi: true,
+    cpuThrottlingRate: handle.cpuThrottlingRate,
+    chromeUserDataDir: opts.chromeUserDataDir,
+    video: opts.video,
+    clearCache: opts.clearCache,
+    firstPartyTld: handle.tld,
   });
 
-  for (const d of input.stats.dns ?? []) {
-    points.push({
-      measurement: "potato_dns",
-      tags: { ...tags, domain: scrubDomainTag(d.domain, workflowTld) },
-      fields: {
-        count: d.count,
-        errorCount: d.errorCount,
-        latencySumMs: d.latencyMs.sumMs,
-        latencyMinMs: d.latencyMs.minMs,
-        latencyMaxMs: d.latencyMs.maxMs,
-        latencyAvgMs: avgLatency(d.latencyMs.sumMs, d.count),
-      },
-    });
-  }
-  for (const d of input.stats.tlsClient ?? []) {
-    points.push({
-      measurement: "potato_tls_client",
-      tags: { ...tags, domain: scrubDomainTag(d.domain, workflowTld) },
-      fields: {
-        count: d.count,
-        errorCount: d.errorCount,
-        latencySumMs: d.latencyMs.sumMs,
-        latencyMinMs: d.latencyMs.minMs,
-        latencyMaxMs: d.latencyMs.maxMs,
-        latencyAvgMs: avgLatency(d.latencyMs.sumMs, d.count),
-      },
-    });
-  }
-  for (const d of input.stats.tlsUpstream ?? []) {
-    points.push({
-      measurement: "potato_tls_upstream",
-      tags: { ...tags, domain: scrubDomainTag(d.domain, workflowTld) },
-      fields: {
-        count: d.count,
-        errorCount: d.errorCount,
-        latencySumMs: d.latencyMs.sumMs,
-        latencyMinMs: d.latencyMs.minMs,
-        latencyMaxMs: d.latencyMs.maxMs,
-        latencyAvgMs: avgLatency(d.latencyMs.sumMs, d.count),
-      },
-    });
-  }
+  const containerName = `sitespeed-${handle.slug}-${opts.phase}-${Date.now()}`;
+  log.info("Starting sitespeed.io", {
+    phase: opts.phase,
+    potatoContainer: handle.potatoContainer,
+    url: handle.url,
+    artifactNamespace: handle.artifactNamespace,
+    slug: handle.slug,
+    runRoot: handle.runRoot,
+    cacheMode: handle.cacheMode,
+    cpuThrottlingRate: handle.cpuThrottlingRate ?? null,
+    chromeUserDataDir: opts.chromeUserDataDir ?? null,
+    country: handle.country,
+    tier: handle.tier,
+    isMirror: handle.isMirror,
+    tld: handle.tld,
+    direct: handle.direct,
+    deviceName: CHROME_DEVICE_NAME,
+  });
 
-  for (const req of input.stats.http ?? []) {
-    const rtags = requestTags(tags, req, workflowTld);
-    points.push({
-      measurement: "potato_http",
-      tags: rtags,
-      fields: latencyFields(req),
-    });
-    if (req.count > 1) {
-      points.push({
-        measurement: "potato_http_duplicate",
-        tags: rtags,
-        fields: {
-          count: req.count,
-          extraCount: req.count - 1,
-          latencySumMs: req.latencyMs.sumMs,
-          latencyAvgMs: avgLatency(req.latencyMs.sumMs, req.count),
+  heartbeat({ step: `sitespeed-${opts.phase}` });
+  const { entrypoint, cmd: wrappedCmd } = sitespeedPotatoEntrypoint(cmd);
+  const signal = activityCancelSignal();
+  try {
+    return await podman.runToCompletion(
+      {
+        name: containerName,
+        image: env.sitespeedImage,
+        entrypoint,
+        cmd: wrappedCmd,
+        networkMode: `container:${handle.potatoContainer}`,
+        binds: [
+          `${env.potatoDataVolume}:/potato-data:ro`,
+          `${handle.runRoot}:/sitespeed.io`,
+          url2GreenBind,
+        ],
+        env: {
+          NODE_EXTRA_CA_CERTS: "/potato-data/ca/potatonetwork-ca.pem",
         },
-      });
-    }
-  }
-
-  for (const req of input.stats.websocket ?? []) {
-    points.push({
-      measurement: "potato_websocket",
-      tags: requestTags(tags, req, workflowTld),
-      fields: {
-        ...latencyFields(req),
-        started: req.started ?? 0,
+        shmSizeBytes: 2 * 1024 * 1024 * 1024,
       },
-    });
+      () => heartbeat({ step: `sitespeed-${opts.phase}-running` }),
+      signal,
+    );
+  } catch (err) {
+    rethrowIfCancelled(err);
   }
-
-  const slow = input.stats.slowHTTP ?? [];
-  for (let i = 0; i < slow.length; i++) {
-    const sample = slow[i]!;
-    points.push({
-      measurement: "potato_http_slow",
-      tags: {
-        ...tags,
-        rank: String(i + 1),
-        host: scrubHostForMetrics(sample.host, workflowTld),
-        method: (sample.method || "GET").toUpperCase(),
-        path: scrubPathForMetrics(sample.path),
-      },
-      fields: {
-        durationMs: sample.durationMs,
-        failed: sample.failed ? true : false,
-      },
-    });
-  }
-
-  const cf = input.stats.cfCache;
-  if (cf) {
-    const statuses = Object.keys(cf).sort();
-    for (const status of statuses) {
-      const count = cf[status];
-      if (typeof count !== "number" || !Number.isFinite(count)) continue;
-      points.push({
-        measurement: "potato_cf_cache",
-        tags: { ...tags, status },
-        fields: { count },
-      });
-    }
-  }
-
-  if (input.overlay) {
-    points.push({
-      measurement: "potato_overlay",
-      tags,
-      fields: {
-        wsMarkers: input.overlay.wsMarkers,
-        apiMarkers: input.overlay.apiMarkers,
-        wsShown: input.overlay.wsShown,
-        apiShown: input.overlay.apiShown,
-        firstIframeMs: input.overlay.firstIframeMs,
-        burned: input.overlay.burned ? true : false,
-      },
-    });
-  }
-
-  return points;
 }
 
-export async function runSitespeed(
-  input: RunSitespeedInput,
-): Promise<RunSitespeedResult> {
+export async function prepareSitespeedRun(
+  input: PrepareSitespeedRunInput,
+): Promise<SitespeedRunHandle> {
   const env = getEnv();
   assertExportConfig(env);
 
@@ -418,20 +277,11 @@ export async function runSitespeed(
   };
   const artifactNamespace = buildArtifactNamespace(dims);
   const slug = buildResultSlug(dims);
-  const tags = metricTagsFromDims({
-    ...dims,
-    browser: input.browser,
-    connectivity: "native",
-  });
 
-  const resultDir = join(
-    env.sitespeedResultsDir,
-    `${slug}-${Date.now()}`,
-  );
-  await mkdir(resultDir, { recursive: true });
-  const chromeProfileDir = join(resultDir, "chrome-profile");
+  const runRoot = join(env.sitespeedResultsDir, `${slug}-${Date.now()}`);
+  await mkdir(runRoot, { recursive: true });
   if (input.cacheMode === "warm") {
-    await mkdir(chromeProfileDir, { recursive: true });
+    await mkdir(join(runRoot, "chrome-profile"), { recursive: true });
   }
 
   const url2GreenGz = resolveUrl2GreenHostPath(
@@ -451,15 +301,14 @@ export async function runSitespeed(
       }`,
     );
   }
-  const url2GreenBind = sitespeedUrl2GreenBind(url2GreenGz);
 
   try {
     await copyFile(
       HOST_FIRST_IFRAME_SCRIPT,
-      join(resultDir, "bt-first-iframe.js"),
+      join(runRoot, "bt-first-iframe.js"),
     );
     await writeFile(
-      join(resultDir, "bt-measure-journey.js"),
+      join(runRoot, "bt-measure-journey.js"),
       buildMeasureJourneyScript({
         url: input.url,
         alias: input.metricPrefix,
@@ -468,133 +317,104 @@ export async function runSitespeed(
     );
   } catch (err) {
     throw new Error(
-      `Failed to stage browsertime scripts into ${resultDir}: ${
+      `Failed to stage browsertime scripts into ${runRoot}: ${
         err instanceof Error ? err.message : String(err)
       } (src=${HOST_FIRST_IFRAME_SCRIPT})`,
     );
   }
 
-  const runSitespeedContainer = async (opts: {
-    phase: "warmup" | "measure";
-    outputFolder: string;
-    video: boolean;
-    removeLighthouse: boolean;
-    clearCache: boolean;
-    chromeUserDataDir?: string;
-  }): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
-    const cmd = buildSitespeedBrowserArgs({
-      browser: input.browser,
-      slug:
-        opts.phase === "warmup" ? `${slug}-warmup` : slug,
-      metricPrefix: input.metricPrefix,
-      cacheMode: input.cacheMode,
-      url: input.url,
-      outputFolder: opts.outputFolder,
-      scriptPath: CONTAINER_FIRST_IFRAME_SCRIPT,
-      multiScriptPath: CONTAINER_MEASURE_JOURNEY,
-      removeLighthouse: opts.removeLighthouse,
-      removeGpsi: true,
-      cpuThrottlingRate: input.cpuThrottlingRate,
-      chromeUserDataDir: opts.chromeUserDataDir,
-      video: opts.video,
-      clearCache: opts.clearCache,
-      firstPartyTld: input.tld,
-    });
-
-    const containerName = `sitespeed-${slug}-${opts.phase}-${Date.now()}`;
-    log.info("Starting sitespeed.io", {
-      phase: opts.phase,
-      potatoContainer: input.potatoContainer,
-      url: input.url,
-      artifactNamespace,
-      slug,
-      resultDir,
-      cacheMode: input.cacheMode,
-      cpuThrottlingRate: input.cpuThrottlingRate ?? null,
-      chromeUserDataDir: opts.chromeUserDataDir ?? null,
-      country: input.country,
-      tier: input.tier,
-      isMirror,
-      tld: input.tld,
-      direct: input.direct,
-      deviceName: CHROME_DEVICE_NAME,
-    });
-
-    heartbeat({ step: `sitespeed-${opts.phase}` });
-    const { entrypoint, cmd: wrappedCmd } = sitespeedEntrypointCmd(cmd);
-    return podman.runToCompletion(
-      {
-        name: containerName,
-        image: env.sitespeedImage,
-        entrypoint,
-        cmd: wrappedCmd,
-        networkMode: `container:${input.potatoContainer}`,
-        binds: [
-          `${env.potatoDataVolume}:/potato-data:ro`,
-          `${resultDir}:/sitespeed.io`,
-          url2GreenBind,
-        ],
-        env: {
-          NODE_EXTRA_CA_CERTS: "/potato-data/ca/potatonetwork-ca.pem",
-        },
-        shmSizeBytes: 2 * 1024 * 1024 * 1024,
-      },
-      () => heartbeat({ step: `sitespeed-${opts.phase}-running` }),
-    );
+  return {
+    runRoot,
+    resultsRoot: join(runRoot, "results"),
+    artifactNamespace,
+    slug,
+    isMirror,
+    browser: input.browser,
+    metricPrefix: input.metricPrefix,
+    country: input.country,
+    tier: input.tier,
+    tld: input.tld,
+    cacheMode: input.cacheMode,
+    direct: input.direct,
+    url: input.url,
+    potatoContainer: input.potatoContainer,
+    potatoApiBaseUrl: input.potatoApiBaseUrl,
+    cpuThrottlingRate: input.cpuThrottlingRate,
   };
+}
 
-  if (input.cacheMode === "warm") {
-    const warmup = await runSitespeedContainer({
-      phase: "warmup",
-      outputFolder: "/sitespeed.io/warmup-results",
-      video: false,
-      removeLighthouse: true,
-      clearCache: false,
-      chromeUserDataDir: CONTAINER_CHROME_PROFILE,
-    });
-    if (warmup.exitCode !== 0) {
-      throw new Error(
-        summarizeSitespeedFailure(
-          warmup.exitCode,
-          `${warmup.stderr}\n${warmup.stdout}`,
-        ),
-      );
-    }
-    heartbeat({ step: "potato-stats-reset" });
-    await resetPotatoStats(input.potatoApiBaseUrl);
-    log.info("Potato stats reset after warm cache fill");
+export async function warmupSitespeedCache(
+  handle: SitespeedRunHandle,
+): Promise<void> {
+  const warmup = await runSitespeedContainer({
+    handle,
+    phase: "warmup",
+    outputFolder: "/sitespeed.io/warmup-results",
+    video: false,
+    removeLighthouse: true,
+    clearCache: false,
+    chromeUserDataDir: CONTAINER_CHROME_PROFILE,
+  });
+  if (warmup.exitCode !== 0) {
+    throw new Error(
+      summarizeSitespeedFailure(
+        warmup.exitCode,
+        `${warmup.stderr}\n${warmup.stdout}`,
+      ),
+    );
   }
+}
 
+export async function measureSitespeed(
+  handle: SitespeedRunHandle,
+): Promise<{ exitCode: number; stdoutTail: string; stderrTail: string }> {
+  const env = getEnv();
   const { exitCode, stdout, stderr } = await runSitespeedContainer({
+    handle,
     phase: "measure",
     outputFolder: CONTAINER_OUTPUT,
     video: true,
     removeLighthouse: !env.sitespeedLighthouse,
-    clearCache: input.cacheMode !== "warm",
+    clearCache: handle.cacheMode !== "warm",
     chromeUserDataDir:
-      input.cacheMode === "warm" ? CONTAINER_CHROME_PROFILE : undefined,
+      handle.cacheMode === "warm" ? CONTAINER_CHROME_PROFILE : undefined,
   });
 
-  const combined = `${stderr}\n${stdout}`;
   if (exitCode !== 0) {
-    throw new Error(summarizeSitespeedFailure(exitCode, combined));
+    throw new Error(
+      summarizeSitespeedFailure(exitCode, `${stderr}\n${stdout}`),
+    );
   }
 
-  const hostResultsRoot = join(resultDir, "results");
+  return {
+    exitCode: 0,
+    stdoutTail: tail(stdout),
+    stderrTail: tail(stderr),
+  };
+}
 
+export async function parseSitespeedMetrics(
+  handle: SitespeedRunHandle,
+): Promise<void> {
   heartbeat({ step: "parse-metrics" });
   let metrics: SitespeedMetricsBundle = emptySitespeedMetricsBundle();
   try {
-    metrics = await loadSitespeedMetrics(hostResultsRoot);
+    metrics = await loadSitespeedMetrics(handle.resultsRoot);
   } catch (err) {
     log.warn("Failed to parse sitespeed JSON", {
       err: err instanceof Error ? err.message : String(err),
     });
   }
+  await writeJsonFile(potatoMetricsPath(handle.runRoot), metrics);
+}
 
+export async function enrichFromPotato(
+  handle: SitespeedRunHandle,
+): Promise<void> {
   heartbeat({ step: "potato-enrichment" });
-  let profile: Awaited<ReturnType<typeof getPotatoProfile>> = {};
-  let baseline: Awaited<ReturnType<typeof getPotatoBaseline>> = {};
+
+  let profile: PotatoProfile = {};
+  let baseline: PotatoBaseline = {};
   let stats: PotatoStatsSnapshot = {
     dns: [],
     tlsClient: [],
@@ -605,18 +425,19 @@ export async function runSitespeed(
   let catalogCfRtt: number | undefined;
   let catalogNearestAwsRtt: number | undefined;
   let nearestAws: string | undefined;
+
   try {
     [profile, baseline, stats] = await Promise.all([
-      getPotatoProfile(input.potatoApiBaseUrl),
-      getPotatoBaseline(input.potatoApiBaseUrl),
-      getPotatoStats(input.potatoApiBaseUrl),
+      getPotatoProfile(handle.potatoApiBaseUrl),
+      getPotatoBaseline(handle.potatoApiBaseUrl),
+      getPotatoStats(handle.potatoApiBaseUrl),
     ]);
     const country = await getPotatoCatalogCountry(
-      input.potatoApiBaseUrl,
-      input.country,
+      handle.potatoApiBaseUrl,
+      handle.country,
     );
     nearestAws = country?.nearestAws;
-    const tier = country?.tiers?.[input.tier];
+    const tier = country?.tiers?.[handle.tier];
     catalogCfRtt = tier?.rttToDest?.cf;
     if (nearestAws && tier?.rttToDest) {
       catalogNearestAwsRtt = tier.rttToDest[nearestAws];
@@ -627,143 +448,238 @@ export async function runSitespeed(
     });
   }
 
-  let overlayMeta: {
-    wsMarkers: number;
-    apiMarkers: number;
-    wsShown: number;
-    apiShown: number;
-    firstIframeMs: number;
-    burned: boolean;
-  } | undefined;
-  let potatoMp4: string | undefined;
-
-  heartbeat({ step: "overlay-burn" });
+  let metrics: SitespeedMetricsBundle = emptySitespeedMetricsBundle();
   try {
-    const firstIframeMs =
-      typeof metrics.browsertime.firstIframeMs === "number"
-        ? metrics.browsertime.firstIframeMs
-        : undefined;
-    const timeline = buildOverlayTimeline({
-      events: stats.events ?? [],
-      pageUrl: input.url,
-      workflowTld: input.tld,
-      firstIframeMs,
-    });
-    overlayMeta = {
-      wsMarkers: timeline.ws.length,
-      apiMarkers: timeline.api.length,
-      wsShown: lastN(timeline.ws, OVERLAY_SLOT_LIMIT).length,
-      apiShown: lastN(timeline.api, OVERLAY_SLOT_LIMIT).length,
-      firstIframeMs: timeline.firstIframeMs,
-      burned: false,
-    };
+    metrics = await readJsonFile(potatoMetricsPath(handle.runRoot));
+  } catch {
+    // empty bundle
+  }
 
-    const sourceMp4 = await findLocalAsset(hostResultsRoot, ".mp4");
-    if (sourceMp4) {
-      const browserSafe =
-        input.browser.replace(/[^a-zA-Z0-9_-]/g, "") || "chrome";
-      const outputName = `${browserSafe}.potato.mp4`;
-      const burned = await burnOverlayOntoVideo({
-        inputMp4: sourceMp4,
-        workDir: overlayWorkDirFor(sourceMp4),
-        timeline,
-        sitespeedImage: env.sitespeedImage,
-        outputName,
-      });
-      potatoMp4 = burned.overlayMp4;
-      overlayMeta.burned = true;
-      log.info("Burned custom potato overlay", {
-        sourceMp4,
-        potatoMp4,
-        ws: overlayMeta.wsMarkers,
-        api: overlayMeta.apiMarkers,
-      });
-    } else {
-      log.warn("No mp4 found for potato overlay burn");
-    }
+  const firstIframeMs =
+    typeof metrics.browsertime.firstIframeMs === "number"
+      ? metrics.browsertime.firstIframeMs
+      : undefined;
+  const overlayTimeline = buildOverlayTimeline({
+    events: stats.events ?? [],
+    pageUrl: handle.url,
+    workflowTld: handle.tld,
+    firstIframeMs,
+  });
+  const overlayMeta: OverlayInfluxMeta = {
+    wsMarkers: overlayTimeline.ws.length,
+    apiMarkers: overlayTimeline.api.length,
+    wsShown: lastN(overlayTimeline.ws, OVERLAY_SLOT_LIMIT).length,
+    apiShown: lastN(overlayTimeline.api, OVERLAY_SLOT_LIMIT).length,
+    firstIframeMs: overlayTimeline.firstIframeMs,
+    burned: false,
+  };
+
+  const enrichment: PotatoEnrichmentDisk = {
+    profile,
+    baseline,
+    stats,
+    catalogCfRtt,
+    catalogNearestAwsRtt,
+    nearestAws,
+    overlayTimeline,
+    overlayMeta,
+  };
+  await writeJsonFile(potatoEnrichmentPath(handle.runRoot), enrichment);
+}
+
+export async function burnPotatoOverlay(
+  handle: SitespeedRunHandle,
+): Promise<{ burned: boolean; potatoMp4?: string }> {
+  heartbeat({ step: "overlay-burn" });
+  const env = getEnv();
+  const signal = activityCancelSignal();
+
+  let enrichment: PotatoEnrichmentDisk;
+  try {
+    enrichment = await readJsonFile(potatoEnrichmentPath(handle.runRoot));
   } catch (err) {
+    log.warn("No enrichment file for overlay burn", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+    const empty: PotatoOverlayResultDisk = { burned: false };
+    await writeJsonFile(potatoOverlayResultPath(handle.runRoot), empty);
+    return empty;
+  }
+
+  try {
+    const sourceMp4 = await findLocalAsset(handle.resultsRoot, ".mp4");
+    if (!sourceMp4) {
+      log.warn("No mp4 found for potato overlay burn");
+      const result: PotatoOverlayResultDisk = { burned: false };
+      await writeJsonFile(potatoOverlayResultPath(handle.runRoot), result);
+      enrichment.overlayMeta.burned = false;
+      await writeJsonFile(potatoEnrichmentPath(handle.runRoot), enrichment);
+      return result;
+    }
+
+    const browserSafe =
+      handle.browser.replace(/[^a-zA-Z0-9_-]/g, "") || "chrome";
+    const outputName = `${browserSafe}.potato.mp4`;
+    const burned = await burnOverlayOntoVideo({
+      inputMp4: sourceMp4,
+      workDir: overlayWorkDirFor(sourceMp4),
+      timeline: enrichment.overlayTimeline,
+      sitespeedImage: env.sitespeedImage,
+      outputName,
+      signal,
+    });
+
+    enrichment.overlayMeta.burned = true;
+    await writeJsonFile(potatoEnrichmentPath(handle.runRoot), enrichment);
+
+    const result: PotatoOverlayResultDisk = {
+      burned: true,
+      potatoMp4: burned.overlayMp4,
+    };
+    await writeJsonFile(potatoOverlayResultPath(handle.runRoot), result);
+    log.info("Burned custom potato overlay", {
+      sourceMp4,
+      potatoMp4: burned.overlayMp4,
+      ws: enrichment.overlayMeta.wsMarkers,
+      api: enrichment.overlayMeta.apiMarkers,
+    });
+    return result;
+  } catch (err) {
+    if (
+      err instanceof PodmanCancelledError ||
+      signal.aborted ||
+      err instanceof CancelledFailure
+    ) {
+      rethrowIfCancelled(err);
+    }
     log.warn("Overlay burn failed", {
       err: err instanceof Error ? err.message : String(err),
     });
+    const result: PotatoOverlayResultDisk = { burned: false };
+    await writeJsonFile(potatoOverlayResultPath(handle.runRoot), result);
+    enrichment.overlayMeta.burned = false;
+    await writeJsonFile(potatoEnrichmentPath(handle.runRoot), enrichment);
+    return result;
   }
+}
 
+export async function emitInfluxMetrics(
+  handle: SitespeedRunHandle,
+): Promise<void> {
   heartbeat({ step: "influx-emit" });
+  const env = getEnv();
+
+  let metrics: SitespeedMetricsBundle = emptySitespeedMetricsBundle();
   try {
-    const points = buildInfluxPoints({
-      tags,
-      workflowTld: input.tld,
-      browsertime: metrics.browsertime,
-      browsertimeTagged: metrics.browsertimeTagged,
-      pagexray: metrics.pagexray,
-      pagexrayTagged: metrics.pagexrayTagged,
-      coach: metrics.coach,
-      axe: metrics.axe,
-      lighthouse: metrics.lighthouse,
-      sustainable: metrics.sustainable,
-      thirdparty: metrics.thirdparty,
-      thirdpartyTagged: metrics.thirdpartyTagged,
-      profile,
-      baseline,
-      catalogCfRtt,
-      catalogNearestAwsRtt,
-      nearestAws,
-      stats,
-      overlay: overlayMeta,
-    });
-    const emit = await emitInfluxWrite(
-      env.influxWriteUrl,
-      points,
-      {
-        username: env.influxWriteUsername,
-        password: env.influxWritePassword,
-        token: env.influxWriteToken,
-      },
-      { timeoutMs: env.influxWriteTimeoutMs },
+    metrics = await readJsonFile(potatoMetricsPath(handle.runRoot));
+  } catch {
+    // empty
+  }
+
+  let enrichment: PotatoEnrichmentDisk | undefined;
+  try {
+    enrichment = await readJsonFile(potatoEnrichmentPath(handle.runRoot));
+  } catch {
+    enrichment = undefined;
+  }
+
+  let overlayMeta = enrichment?.overlayMeta;
+  try {
+    const overlayResult = await readJsonFile<PotatoOverlayResultDisk>(
+      potatoOverlayResultPath(handle.runRoot),
     );
-    log.info("Influx write", emit);
-  } catch (err) {
-    log.warn("Influx write failed", {
-      err: err instanceof Error ? err.message : String(err),
-    });
-  }
-
-  let s3Keys: string[] | undefined;
-  if (env.s3Bucket && env.s3Key && env.s3Secret) {
-    heartbeat({ step: "s3-upload" });
-    try {
-      const uploaded = await uploadLocalSitespeedArtifacts({
-        resultRoot: hostResultsRoot,
-        bucket: env.s3Bucket,
-        accessKeyId: env.s3Key,
-        secretAccessKey: env.s3Secret,
-        region: env.s3Region,
-        endpoint: env.s3Endpoint,
-        forcePathStyle: env.s3ForcePathStyle,
-        latestPrefix: artifactNamespace,
-        browser: input.browser,
-        connectivity: "native",
-        potatoMp4,
-      });
-      s3Keys = uploaded.uploaded;
-      log.info("Uploaded local sitespeed artifacts to S3", uploaded);
-    } catch (err) {
-      log.warn("S3 upload failed", {
-        err: err instanceof Error ? err.message : String(err),
-        slug,
-        artifactNamespace,
-      });
+    if (overlayMeta) {
+      overlayMeta = { ...overlayMeta, burned: overlayResult.burned };
     }
+  } catch {
+    // optional
   }
 
-  return {
-    exitCode: 0,
-    artifactNamespace,
-    graphiteNamespace: artifactNamespace,
-    slug,
-    isMirror,
-    resultDir: hostResultsRoot,
-    s3Keys,
-    stdoutTail: tail(stdout),
-    stderrTail: tail(stderr),
-  };
+  const tags = metricTagsFromDims({
+    metricPrefix: handle.metricPrefix,
+    country: handle.country,
+    tier: handle.tier,
+    cacheMode: handle.cacheMode,
+    direct: handle.direct,
+    isMirror: handle.isMirror,
+    base: env.artifactNamespaceBase,
+    browser: handle.browser,
+    connectivity: "native",
+  });
+
+  const points = buildInfluxPoints({
+    tags,
+    workflowTld: handle.tld,
+    browsertime: metrics.browsertime,
+    browsertimeTagged: metrics.browsertimeTagged,
+    pagexray: metrics.pagexray,
+    pagexrayTagged: metrics.pagexrayTagged,
+    coach: metrics.coach,
+    axe: metrics.axe,
+    lighthouse: metrics.lighthouse,
+    sustainable: metrics.sustainable,
+    thirdparty: metrics.thirdparty,
+    thirdpartyTagged: metrics.thirdpartyTagged,
+    profile: enrichment?.profile ?? {},
+    baseline: enrichment?.baseline ?? {},
+    catalogCfRtt: enrichment?.catalogCfRtt,
+    catalogNearestAwsRtt: enrichment?.catalogNearestAwsRtt,
+    nearestAws: enrichment?.nearestAws,
+    stats: enrichment?.stats ?? {
+      dns: [],
+      tlsClient: [],
+      tlsUpstream: [],
+      http: [],
+      websocket: [],
+    },
+    overlay: overlayMeta,
+  });
+
+  const emit = await emitInfluxWrite(
+    env.influxWriteUrl,
+    points,
+    {
+      username: env.influxWriteUsername,
+      password: env.influxWritePassword,
+      token: env.influxWriteToken,
+    },
+    { timeoutMs: env.influxWriteTimeoutMs },
+  );
+  log.info("Influx write", emit);
+}
+
+export async function uploadSitespeedArtifacts(
+  handle: SitespeedRunHandle,
+): Promise<{ s3Keys?: string[] }> {
+  const env = getEnv();
+  if (!env.s3Bucket || !env.s3Key || !env.s3Secret) {
+    return {};
+  }
+
+  heartbeat({ step: "s3-upload" });
+  let potatoMp4: string | undefined;
+  try {
+    const overlayResult = await readJsonFile<PotatoOverlayResultDisk>(
+      potatoOverlayResultPath(handle.runRoot),
+    );
+    potatoMp4 = overlayResult.potatoMp4;
+  } catch {
+    // optional
+  }
+
+  const uploaded = await uploadLocalSitespeedArtifacts({
+    resultRoot: handle.resultsRoot,
+    bucket: env.s3Bucket,
+    accessKeyId: env.s3Key,
+    secretAccessKey: env.s3Secret,
+    region: env.s3Region,
+    endpoint: env.s3Endpoint,
+    forcePathStyle: env.s3ForcePathStyle,
+    latestPrefix: handle.artifactNamespace,
+    browser: handle.browser,
+    connectivity: "native",
+    potatoMp4,
+  });
+  log.info("Uploaded local sitespeed artifacts to S3", uploaded);
+  return { s3Keys: uploaded.uploaded };
 }

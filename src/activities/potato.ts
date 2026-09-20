@@ -320,8 +320,11 @@ export async function getPotatoStats(
   return apiFetch(apiBaseUrl, "/v1/stats");
 }
 
-export async function resetPotatoStats(apiBaseUrl: string): Promise<void> {
-  await apiFetch(apiBaseUrl, "/v1/stats/reset", { method: "POST" });
+/** Reset Potato counters (e.g. after warm-cache fill, before measure). */
+export async function resetPotatoStats(
+  handle: Pick<PotatoHandle, "apiBaseUrl">,
+): Promise<void> {
+  await apiFetch(handle.apiBaseUrl, "/v1/stats/reset", { method: "POST" });
 }
 
 export async function getPotatoCatalogCountry(

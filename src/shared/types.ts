@@ -63,3 +63,29 @@ export type PotatoRefreshResult = {
   /** Images pulled at the start of refresh (POTATO_IMAGE, SITESPEED_IMAGE). */
   pulledImages: string[];
 };
+
+/**
+ * Lightweight handle passed between sitespeed activities.
+ * Heavy JSON lives on disk under `runRoot` (not in workflow history).
+ */
+export type SitespeedRunHandle = {
+  /** Engine-host staging dir bind-mounted as /sitespeed.io */
+  runRoot: string;
+  /** sitespeed --outputFolder on host (= runRoot/results) */
+  resultsRoot: string;
+  artifactNamespace: string;
+  slug: string;
+  isMirror: boolean;
+  browser: string;
+  metricPrefix: string;
+  country: string;
+  tier: PotatoTier;
+  tld: string;
+  cacheMode: CacheMode;
+  direct: boolean;
+  url: string;
+  potatoContainer: string;
+  potatoApiBaseUrl: string;
+  /** Chrome CPUThrottlingRate when set (integer ≥ 1). */
+  cpuThrottlingRate?: number;
+};

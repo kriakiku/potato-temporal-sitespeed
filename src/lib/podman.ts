@@ -291,7 +291,12 @@ export const podman = {
   async runToCompletion(
     opts: RunContainerOptions,
     onTick?: () => void,
+    signal?: AbortSignal,
   ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+    if (signal?.aborted) {
+      throw new PodmanCancelledError(`cancelled before start: ${opts.name}`);
+    }
+
     await this.removeContainer(opts.name, true);
     await pullImage(opts.image);
 
@@ -305,14 +310,50 @@ export const podman = {
     }
 
     const tick = setInterval(() => onTick?.(), 10_000);
+    let cancelled = false;
+    const onAbort = () => {
+      cancelled = true;
+      void this.stopContainer(container.id, 3).finally(() => {
+        void this.removeContainer(container.id, true);
+      });
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
     let exitCode = 1;
     try {
-      const result = await container.wait();
+      if (signal?.aborted) {
+        onAbort();
+        throw new PodmanCancelledError(`cancelled: ${opts.name}`);
+      }
+
+      const result = await Promise.race([
+        container.wait(),
+        abortPromise(signal),
+      ]);
+
+      if (result === ABORTED || cancelled || signal?.aborted) {
+        throw new PodmanCancelledError(`cancelled: ${opts.name}`);
+      }
+
       exitCode =
         typeof result === "object" && result && "StatusCode" in result
           ? Number((result as { StatusCode: number }).StatusCode)
           : 1;
+    } catch (err) {
+      if (
+        err instanceof PodmanCancelledError ||
+        cancelled ||
+        signal?.aborted
+      ) {
+        await this.stopContainer(container.id, 3).catch(() => undefined);
+        await this.removeContainer(container.id, true).catch(() => undefined);
+        throw err instanceof PodmanCancelledError
+          ? err
+          : new PodmanCancelledError(`cancelled: ${opts.name}`);
+      }
+      throw err;
     } finally {
+      signal?.removeEventListener("abort", onAbort);
       clearInterval(tick);
     }
 
@@ -336,6 +377,27 @@ export const podman = {
     return { exitCode, stdout, stderr };
   },
 };
+
+export class PodmanCancelledError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PodmanCancelledError";
+  }
+}
+
+const ABORTED = Symbol("aborted");
+
+function abortPromise(signal?: AbortSignal): Promise<typeof ABORTED> {
+  if (!signal) {
+    return new Promise(() => {
+      /* never resolves without a signal */
+    });
+  }
+  if (signal.aborted) return Promise.resolve(ABORTED);
+  return new Promise((resolve) => {
+    signal.addEventListener("abort", () => resolve(ABORTED), { once: true });
+  });
+}
 
 /** Docker log multiplex: [stream:u8][0,0,0][size:u32be][payload] */
 function demuxDockerLogs(buf: Uint8Array): {

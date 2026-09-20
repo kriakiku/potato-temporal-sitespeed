@@ -2,12 +2,13 @@
 
 Example of wiring **[potato-network](https://github.com/kriakiku/potato-network)** + **[Temporal](https://temporal.io/)** + **[sitespeed.io](https://www.sitespeed.io/)** together.
 
-A Bun Temporal worker starts a per-run PotatoNetwork sidecar (via Podman/Docker Engine API), runs sitespeed.io through that network namespace, writes **local JSON/HTML/media**, then the worker:
+A Bun Temporal worker starts a per-run PotatoNetwork sidecar (via Podman/Docker Engine API), runs sitespeed.io through that network namespace, writes **local JSON/HTML/media**, then separate Temporal activities:
 
-1. Parses sitespeed JSON (`analysisstorer`)
-2. Enriches with Potato profile / baseline / catalog + DNS/TLS/HTTP/WS stats (+ event timeline)
-3. Uploads screenshot/video/HTML optionally to S3; video keeps **browsertime’s built-in timer**
-4. Emits **Influx line protocol** over HTTP to [VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/integrations/datain/) (`/write`) or any Influx-compatible endpoint
+1. Parse sitespeed JSON (`analysisstorer`) → `potato-metrics.json`
+2. Enrich with Potato profile / baseline / catalog + DNS/TLS/HTTP/WS stats (+ event timeline) → `potato-enrichment.json`
+3. Burn a custom ASS overlay via ffmpeg (`burnPotatoOverlay`) → `{browser}.potato.mp4`
+4. Emit **Influx line protocol** over HTTP to [VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/integrations/datain/) (`/write`) or any Influx-compatible endpoint
+5. Optionally upload screenshot/video/HTML to S3 (native video keeps browsertime’s timer; overlay is a separate object)
 
 Treat this repo as a reference integration, not a product.
 
@@ -15,13 +16,18 @@ Treat this repo as a reference integration, not a product.
 
 ### `siteSpeedTestWorkflow`
 
-1. Resolves an entry URL via demo auth APIs (`demo.{tld}` / optional `lobby.{tld}`) **before** Potato starts (auth is not shaped)
-2. Ensures a shared volume for Potato catalog / baseline / MITM CA
-3. Boots PotatoNetwork with `country` + `tier` from the workflow input (crons off)
-4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` once (`-n 1`) with `--network container:<potato>`, bind-mounted result dir, `--plugins.add analysisstorer`, `--video`, `--browsertime.videoParams.addTimer true`, browsertime `--script` for first-iframe timing, and a **multi journey** that taps `[data-test-id="fullScreen"]` when present (gate runs before pageCompleteCheck). For `cacheMode=warm`, runs a lighter warmup sitespeed first (shared Chrome `user-data-dir`), then `POST /v1/stats/reset`, then the measure run
-5. Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), `--cpu` / `--sustainable.enable` / `--axe.enable`, WebGPU/WebGL via SwiftShader (`enable-unsafe-webgpu`, `use-webgpu-adapter=swiftshader`, …), optional `cpuThrottlingRate`, `cacheMode` cold|warm
-6. Worker post-process: Influx metrics write + optional S3 upload (video keeps browsertime timer)
-7. Tears down the Potato container
+Activities (visible in Temporal UI):
+
+1. `resolveEntryUrl` — demo auth APIs (`demo.{tld}` / optional `lobby.{tld}`) **before** Potato starts (auth is not shaped)
+2. `ensurePotatoVolume` / `startPotato` / `waitPotatoHealthy`
+3. `prepareSitespeedRun` — result dir, url2green, browsertime scripts, namespace/slug
+4. Optional warm path: `warmupSitespeedCache` → `resetPotatoStats`
+5. `measureSitespeed` — `sitespeedio/sitespeed.io:40.0.0-plus1` once (`-n 1`) with `--network container:<potato>`, `--video`, multi journey, etc.
+6. `parseSitespeedMetrics` → `enrichFromPotato` (while Potato is still up)
+7. Tear down Potato (`stopPotato`, non-cancellable cleanup)
+8. `burnPotatoOverlay` → `emitInfluxMetrics` → `uploadSitespeedArtifacts` (non-fatal failures; cancel still propagates)
+
+Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), optional `cpuThrottlingRate`, `cacheMode` cold|warm.
 
 ### `potatoRefreshWorkflow`
 
@@ -173,7 +179,7 @@ Sitespeed always runs with **`-n 1`**. Prefer more frequent Temporal workflows o
 
 `cacheMode=cold` is a single measure run with `--browsertime.cacheClearRaw`.
 
-Cancel: Temporal workflow cancellation is supported — Potato containers are always stopped in a non-cancellable cleanup (`finally`), including when the run is cancelled mid-sitespeed.
+Cancel: Temporal workflow cancellation stops the in-flight sitespeed/ffmpeg container (AbortSignal → Podman stop/rm), then always tears down Potato and deletes the demo master session in non-cancellable cleanup. Post-Potato steps (`burnPotatoOverlay` / Influx / S3) are skipped when cancel happens during measure/enrich.
 
 ### Entry URL
 
@@ -250,7 +256,7 @@ The worker downloads [sitespeedio/url2green](https://github.com/sitespeedio/url2
 
 Browsertime’s built-in timer stays **on** for `{browser}.native.mp4` (`--browsertime.videoParams.addTimer true`). Measure runs also pass `--visualElements` (largest H1 + largest image hero timings) and `--firstParty` from the workflow apex TLD (pagexray first/third-party cookie splits).
 
-After measure, the worker burns a custom ASS overlay (nav / iframe / sliding WS+API markers) via ffmpeg in the sitespeed image and uploads it separately as `{browser}.potato.mp4`. The native mp4 is left unchanged. Overlay burn failure is non-fatal (native still uploads; `potato_overlay.burned` stays false).
+After measure (and Potato enrich), activity `burnPotatoOverlay` burns a custom ASS overlay (nav / iframe / sliding WS+API markers) via ffmpeg in the sitespeed image and writes `{browser}.potato.mp4` (`libx264 -preset ultrafast -crf 28`). The native mp4 is left unchanged. Overlay burn failure is non-fatal (native still uploads; `potato_overlay.burned` stays false). Workflow cancel mid-burn stops the ffmpeg container.
 
 ### Fullscreen tap
 
@@ -327,7 +333,7 @@ All config is process env (no `.env` file).
 | `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Influx write host |
 | `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse. Worker installs Potato MITM CA + `ignore-certificate-errors` / `disable-quic`; Chrome also gets SwiftShader WebGPU/WebGL args |
 | `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse |
-| `SITESPEED_MAX_ATTEMPTS` | `1` | Temporal activity retries for `runSitespeed` |
+| `SITESPEED_MAX_ATTEMPTS` | `1` | Temporal activity retries for `measureSitespeed` / `warmupSitespeedCache` |
 | `SITESPEED_RESULTS_DIR` | `/tmp/potato-sitespeed-results` | Absolute **engine-host** path; when worker is containerized, bind-mount the same path (see Local result files) |
 | `SITESPEED_URL2GREEN_PATH` | `{SITESPEED_RESULTS_DIR}/.url2green/url2green.json.gz` | Absolute path to url2green `.gz` (or its directory) for local sustainable greencheck |
 | `INFLUX_WRITE_URL` | — | HTTP write URL (e.g. `http://vm:8428/write`). Skip emit if unset |

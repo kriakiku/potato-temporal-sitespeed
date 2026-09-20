@@ -1,5 +1,5 @@
 /**
- * Max Temporal activity attempts for `runSitespeed`.
+ * Max Temporal activity attempts for `measureSitespeed` / `warmupSitespeedCache`.
  * At workflow-bundle time the worker replaces `process.env.SITESPEED_MAX_ATTEMPTS`
  * via webpack DefinePlugin (default `"1"`). Do not read other env vars here.
  */

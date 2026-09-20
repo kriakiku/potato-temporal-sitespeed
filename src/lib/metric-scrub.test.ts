@@ -4,7 +4,7 @@ import {
   scrubHostForMetrics,
   scrubPathForMetrics,
 } from "./metric-scrub";
-import { buildInfluxPoints } from "../activities/sitespeed";
+import { buildInfluxPoints } from "./influx-points";
 
 describe("metric-scrub", () => {
   test("strip query and hash", () => {

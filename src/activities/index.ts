@@ -8,9 +8,19 @@ export {
   stopPotato,
   refreshPotatoCatalog,
   refreshPotatoBaseline,
+  resetPotatoStats,
 } from "./potato";
 
-export { runSitespeed } from "./sitespeed";
+export {
+  prepareSitespeedRun,
+  warmupSitespeedCache,
+  measureSitespeed,
+  parseSitespeedMetrics,
+  enrichFromPotato,
+  burnPotatoOverlay,
+  emitInfluxMetrics,
+  uploadSitespeedArtifacts,
+} from "./sitespeed";
 
 export { resolveEntryUrl, deleteMasterSession } from "./auth";
 

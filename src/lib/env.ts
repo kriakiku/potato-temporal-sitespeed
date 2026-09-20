@@ -93,7 +93,7 @@ export type WorkerEnv = {
    * Run @sitespeed.io/plugin-lighthouse (plus1 image). Default true.
    */
   sitespeedLighthouse: boolean;
-  /** Max activity attempts for runSitespeed (default 1). */
+  /** Max activity attempts for measureSitespeed / warmupSitespeedCache (default 1). */
   sitespeedMaxAttempts: number;
   /**
    * Absolute path on the engine host for per-run sitespeed result trees.

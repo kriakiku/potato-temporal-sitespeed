@@ -14,7 +14,7 @@ import {
   extractSustainableFields,
   extractThirdpartyFields,
 } from "./sitespeed-json";
-import { buildInfluxPoints } from "../activities/sitespeed";
+import { buildInfluxPoints } from "./influx-points";
 
 describe("withInfluxPrecisionNs", () => {
   test("appends precision=ns when missing", () => {

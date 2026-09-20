@@ -15,6 +15,8 @@ export type BurnOverlayInput = {
   outputName?: string;
   /** Optional duration override (ms); default 3 minutes */
   durationMs?: number;
+  /** Temporal / caller cancellation — stops ffprobe/ffmpeg containers */
+  signal?: AbortSignal;
 };
 
 export type BurnOverlayResult = {
@@ -29,23 +31,28 @@ async function probeDurationMs(
   image: string,
   containerInput: string,
   binds: string[],
+  signal?: AbortSignal,
 ): Promise<number | undefined> {
   try {
-    const { exitCode, stdout } = await podman.runToCompletion({
-      name: `ffprobe-${Date.now()}`,
-      image,
-      entrypoint: ["ffprobe"],
-      cmd: [
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        containerInput,
-      ],
-      binds,
-    });
+    const { exitCode, stdout } = await podman.runToCompletion(
+      {
+        name: `ffprobe-${Date.now()}`,
+        image,
+        entrypoint: ["ffprobe"],
+        cmd: [
+          "-v",
+          "error",
+          "-show_entries",
+          "format=duration",
+          "-of",
+          "default=noprint_wrappers=1:nokey=1",
+          containerInput,
+        ],
+        binds,
+      },
+      undefined,
+      signal,
+    );
     if (exitCode !== 0) return undefined;
     const sec = Number(stdout.trim());
     if (!Number.isFinite(sec) || sec <= 0) return undefined;
@@ -77,9 +84,16 @@ export async function burnOverlayOntoVideo(
   const containerAss = `/data/${assName}`;
   const containerTmp = `/data/${tmpName}`;
 
-  let durationMs = input.durationMs;
-  if (durationMs === undefined) {
-    durationMs = await probeDurationMs(input.sitespeedImage, containerIn, binds);
+  // Prefer caller/timeline hint over ffprobe (avoids an extra container start).
+  let durationMs =
+    input.durationMs ?? input.timeline.videoDurationHintMs;
+  if (durationMs === undefined || durationMs < 1000) {
+    durationMs = await probeDurationMs(
+      input.sitespeedImage,
+      containerIn,
+      binds,
+      input.signal,
+    );
   }
   if (durationMs === undefined || durationMs < 1000) {
     durationMs = 180_000;
@@ -94,28 +108,42 @@ export async function burnOverlayOntoVideo(
       input: input.inputMp4,
       output: outHost,
       durationMs,
+      encoder: "libx264 ultrafast crf=28",
       ws: input.timeline.ws.length,
       api: input.timeline.api.length,
       firstIframeMs: input.timeline.firstIframeMs,
     }),
   );
 
-  const { exitCode, stderr, stdout } = await podman.runToCompletion({
-    name: `ffmpeg-overlay-${Date.now()}`,
-    image: input.sitespeedImage,
-    entrypoint: ["ffmpeg"],
-    cmd: [
-      "-y",
-      "-i",
-      containerIn,
-      "-vf",
-      `ass=${containerAss}`,
-      "-c:a",
-      "copy",
-      containerTmp,
-    ],
-    binds,
-  });
+  // Favor encode speed over size/quality — diagnostic overlay only.
+  const { exitCode, stderr, stdout } = await podman.runToCompletion(
+    {
+      name: `ffmpeg-overlay-${Date.now()}`,
+      image: input.sitespeedImage,
+      entrypoint: ["ffmpeg"],
+      cmd: [
+        "-y",
+        "-i",
+        containerIn,
+        "-vf",
+        `ass=${containerAss}`,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-crf",
+        "28",
+        "-threads",
+        "0",
+        "-c:a",
+        "copy",
+        containerTmp,
+      ],
+      binds,
+    },
+    undefined,
+    input.signal,
+  );
 
   if (exitCode !== 0) {
     throw new Error(
