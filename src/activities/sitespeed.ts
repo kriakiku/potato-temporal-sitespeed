@@ -25,8 +25,11 @@ import {
 import { uploadLocalSitespeedArtifacts } from "../lib/s3-latest";
 import { podman } from "../lib/podman";
 import {
-  loadSitespeedMetricFields,
+  emptySitespeedMetricsBundle,
+  loadSitespeedMetrics,
+  type SitespeedMetricsBundle,
   type SitespeedTimingFields,
+  type TaggedMetricPoint,
 } from "../lib/sitespeed-json";
 import {
   emitInfluxWrite,
@@ -180,6 +183,15 @@ export function buildInfluxPoints(input: {
   tags: Record<string, string>;
   workflowTld: string;
   browsertime: SitespeedTimingFields;
+  browsertimeTagged?: TaggedMetricPoint[];
+  pagexray?: SitespeedTimingFields;
+  pagexrayTagged?: TaggedMetricPoint[];
+  coach?: SitespeedTimingFields;
+  axe?: SitespeedTimingFields;
+  lighthouse?: SitespeedTimingFields;
+  sustainable?: SitespeedTimingFields;
+  thirdparty?: SitespeedTimingFields;
+  thirdpartyTagged?: TaggedMetricPoint[];
   profile: Awaited<ReturnType<typeof getPotatoProfile>>;
   baseline: Awaited<ReturnType<typeof getPotatoBaseline>>;
   catalogCfRtt?: number;
@@ -198,13 +210,39 @@ export function buildInfluxPoints(input: {
   const points: InfluxPoint[] = [];
   const { tags, workflowTld } = input;
 
-  if (Object.keys(input.browsertime).length) {
-    points.push({
-      measurement: "sitespeed_browsertime",
-      tags,
-      fields: input.browsertime,
-    });
-  }
+  const pushFlat = (
+    measurement: string,
+    fields: SitespeedTimingFields | undefined,
+  ) => {
+    if (!fields || Object.keys(fields).length === 0) return;
+    points.push({ measurement, tags, fields });
+  };
+
+  const pushTagged = (
+    measurement: string,
+    tagged: TaggedMetricPoint[] | undefined,
+  ) => {
+    if (!tagged?.length) return;
+    for (const p of tagged) {
+      if (Object.keys(p.fields).length === 0) continue;
+      points.push({
+        measurement,
+        tags: { ...tags, ...p.tags },
+        fields: p.fields,
+      });
+    }
+  };
+
+  pushFlat("potato_browsertime", input.browsertime);
+  pushTagged("potato_browsertime", input.browsertimeTagged);
+  pushFlat("potato_pagexray", input.pagexray);
+  pushTagged("potato_pagexray", input.pagexrayTagged);
+  pushFlat("potato_coach", input.coach);
+  pushFlat("potato_axe", input.axe);
+  pushFlat("potato_lighthouse", input.lighthouse);
+  pushFlat("potato_sustainable", input.sustainable);
+  pushFlat("potato_thirdparty", input.thirdparty);
+  pushTagged("potato_thirdparty", input.thirdpartyTagged);
 
   const profileFields: Record<string, number | boolean | undefined> = {
     delayMs: input.profile.delayMs,
@@ -514,9 +552,9 @@ export async function runSitespeed(
   const hostResultsRoot = join(resultDir, "results");
 
   heartbeat({ step: "parse-metrics" });
-  let browsertime: SitespeedTimingFields = {};
+  let metrics: SitespeedMetricsBundle = emptySitespeedMetricsBundle();
   try {
-    browsertime = await loadSitespeedMetricFields(hostResultsRoot);
+    metrics = await loadSitespeedMetrics(hostResultsRoot);
   } catch (err) {
     log.warn("Failed to parse sitespeed JSON", {
       err: err instanceof Error ? err.message : String(err),
@@ -571,8 +609,8 @@ export async function runSitespeed(
   heartbeat({ step: "overlay-metrics" });
   try {
     const firstIframeMs =
-      typeof browsertime.firstIframeMs === "number"
-        ? browsertime.firstIframeMs
+      typeof metrics.browsertime.firstIframeMs === "number"
+        ? metrics.browsertime.firstIframeMs
         : undefined;
     const timeline = buildOverlayTimeline({
       events: stats.events ?? [],
@@ -599,7 +637,16 @@ export async function runSitespeed(
     const points = buildInfluxPoints({
       tags,
       workflowTld: input.tld,
-      browsertime,
+      browsertime: metrics.browsertime,
+      browsertimeTagged: metrics.browsertimeTagged,
+      pagexray: metrics.pagexray,
+      pagexrayTagged: metrics.pagexrayTagged,
+      coach: metrics.coach,
+      axe: metrics.axe,
+      lighthouse: metrics.lighthouse,
+      sustainable: metrics.sustainable,
+      thirdparty: metrics.thirdparty,
+      thirdpartyTagged: metrics.thirdpartyTagged,
       profile,
       baseline,
       catalogCfRtt,

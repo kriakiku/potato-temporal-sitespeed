@@ -216,11 +216,17 @@ Cluster example: `http://vminsert:8480/insert/0/influx/write`.
 
 Grafana reads VictoriaMetrics as a Prometheus datasource — no Telegraf required.
 
-Measurements (tags include `metricPrefix`, `country`, `tier`, `cacheMode`, `direct`, `isMirror`, `browser`, `connectivity` — **not** the page URL):
+Measurements (tags include `metricPrefix`, `country`, `tier`, `cacheMode`, `direct`, `isMirror`, `browser`, `connectivity` — **not** the page URL). All sitespeed-derived series use the `potato_` prefix (`sitespeed_browsertime` was renamed to `potato_browsertime`).
 
 | Measurement | Fields (examples) |
 |-------------|-------------------|
-| `sitespeed_browsertime` | Visual / navigation timings from analysisstorer JSON (includes `firstIframeMs` when the browsertime script fires) |
+| `potato_browsertime` | Timings / visual / CWV / CPU longTasks / heaps / `firstIframeMs`; tagged points for `cpuCategory`, `consoleName` |
+| `potato_pagexray` | `requests`, `transferSize`, `contentSize`, cookies, …; tagged `contentType` / `code` |
+| `potato_coach` | `score`, `performanceScore`, `bestpracticeScore`, `privacyScore`, DOM info |
+| `potato_axe` | `violationsCritical` / `Serious` / `Moderate` / `Minor` |
+| `potato_lighthouse` | Category scores 0–100 + `audit_first_contentful_paint` (and LCP/TBT/CLS) |
+| `potato_sustainable` | `co2PerPageView`, `co2FirstParty`, `co2ThirdParty`, `totalCO2` |
+| `potato_thirdparty` | `requestsTotal` / `requestsPercentage`; tagged `thirdPartyCategory` / `tool` |
 | `potato_profile` | `delayMs`, Mbps, `lossPercent`, `cfRttMs`, `hostCfRttMs`, … |
 | `potato_dns` | per-`domain`: `count`, `errorCount`, `latencyAvgMs`, … |
 | `potato_tls_client` | MITM server handshake (includes synthetic last-mile sleep) |
