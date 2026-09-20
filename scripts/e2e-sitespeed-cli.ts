@@ -93,8 +93,6 @@ async function main(): Promise<void> {
     buildMeasureJourneyScript({
       url,
       alias: "ci",
-      // docs page has no fullscreen marker — keep CI wait short
-      fullscreenWaitMs: 2_000,
     }),
     "utf8",
   );

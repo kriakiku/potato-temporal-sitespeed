@@ -260,7 +260,7 @@ After measure (and Potato enrich), activity `burnPotatoOverlay` burns a custom A
 
 ### Fullscreen tap
 
-Each run stages a browsertime **multi journey** (`bt-measure-journey.js`, run with `--multi`) that opens the entry URL under `commands.measure` via raw Selenium `driver.get` (not `commands.navigate`, which would block on `pageCompleteCheck` first), waits up to 10s for `[data-test-id="fullScreen"]` (presence gate only), **Actions-taps the viewport center** if the marker appeared, then `wait.byPageToComplete()` before `measure.stop`. Warm cache is a separate sitespeed pass with a shared Chrome profile (see above), not an in-script pre-navigate.
+Each run stages a browsertime **multi journey** (`bt-measure-journey.js`, run with `--multi`) that opens the entry URL under `commands.measure` via raw Selenium `driver.get` (not `commands.navigate`, which would block on `pageCompleteCheck` first), injects CSS to hide `[data-test-id="fullScreen"]` (`display:none!important`, no wait/click), then `wait.byPageToComplete()` before `measure.stop`. Warm cache is a separate sitespeed pass with a shared Chrome profile (see above), not an in-script pre-navigate.
 
 Unset `INFLUX_WRITE_URL` → metrics emit is skipped (logged once).
 

@@ -152,7 +152,6 @@ export function buildSitespeedBrowserArgs(
     "180000",
     "--browsertime.timeouts.pageLoad",
     "300000",
-    // fullScreen control can appear well after first paint
     "--browsertime.timeouts.elementWait",
     "60000",
   );

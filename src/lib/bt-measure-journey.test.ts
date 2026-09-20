@@ -1,43 +1,50 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildFullscreenHideJs,
   buildMeasureJourneyScript,
   FULLSCREEN_SELECTOR,
 } from "./bt-measure-journey";
 
+describe("buildFullscreenHideJs", () => {
+  test("sets display none important on fullscreen selector", () => {
+    const js = buildFullscreenHideJs();
+    expect(js).toContain("createElement('style')");
+    expect(js).toContain("data-test-id");
+    expect(js).toContain("fullScreen");
+    expect(js).toContain("display:none!important");
+    expect(js).toContain("data-potato-hide-fullscreen");
+  });
+});
+
 describe("buildMeasureJourneyScript", () => {
-  test("gates on fullscreen marker then Actions-taps viewport center", () => {
+  test("injects CSS hide for fullscreen marker after driver.get", () => {
     const src = buildMeasureJourneyScript({
       url: "https://example.com/game#masterSessionId=abc",
       alias: "lobby",
-      fullscreenWaitMs: 45_000,
     });
     expect(src).toContain(FULLSCREEN_SELECTOR);
     expect(src).toContain("https://example.com/game#masterSessionId=abc");
-    expect(src).toContain("getActions");
-    expect(src).toContain('origin: "viewport"');
-    expect(src).toContain("innerWidth");
-    expect(src).toContain(".click().perform()");
-    expect(src).not.toContain("el.click()");
-    expect(src).not.toContain("commands.click(");
-    expect(src).not.toContain("var warm");
-    expect(src).not.toContain("if (warm)");
+    expect(src).toContain("display:none!important");
+    expect(src).toContain("createElement('style')");
+    expect(src).toContain("data-potato-hide-fullscreen");
+    expect(src).toContain("await driver.get(url);");
+    expect(src).toContain("byPageToComplete");
+    expect(src).not.toContain("getActions");
+    expect(src).not.toContain("commands.wait(selector");
+    expect(src).not.toContain("await commands.navigate");
+    expect(src).not.toContain("tapFullscreen");
   });
 
-  test("opens via driver.get before gate; pageComplete after tap", () => {
+  test("hide runs before pageComplete", () => {
     const src = buildMeasureJourneyScript({
       url: "https://example.com/",
       alias: "table",
     });
-    expect(src).toContain("await commands.measure.start(alias);");
-    expect(src).toContain("await driver.get(url);");
-    expect(src).not.toContain("await commands.navigate");
-    expect(src).toContain("byPageToComplete");
-    expect(src).toContain("var fullscreenWaitMs = 10000;");
     const afterGet = src.split("driver.get(url)")[1] ?? "";
-    const gateIdx = afterGet.indexOf("commands.wait");
+    const hideIdx = afterGet.indexOf("js.run");
     const completeIdx = afterGet.indexOf("byPageToComplete");
-    expect(gateIdx).toBeGreaterThanOrEqual(0);
-    expect(completeIdx).toBeGreaterThan(gateIdx);
+    expect(hideIdx).toBeGreaterThanOrEqual(0);
+    expect(completeIdx).toBeGreaterThan(hideIdx);
   });
 
   test("preserves auth-style #hash in embedded URL for driver.get", () => {
