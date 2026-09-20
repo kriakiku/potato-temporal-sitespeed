@@ -179,25 +179,30 @@ async function main(): Promise<void> {
     timeline,
     sitespeedImage,
     durationMs,
+    outputName: "chrome.potato.mp4",
   });
 
   const overlaySt = await stat(burned.overlayMp4);
-  const rawSt = await stat(join(workDir, "chrome.native.raw.mp4"));
+  const nativeSt = await stat(mp4Path);
   const assSt = await stat(burned.assPath);
   if (overlaySt.size < 1000) {
     throw new Error(`overlay mp4 too small: ${overlaySt.size}`);
   }
-  if (rawSt.size < 1000) {
-    throw new Error(`raw mp4 missing/small: ${rawSt.size}`);
+  if (nativeSt.size < 1000) {
+    throw new Error(`native mp4 missing/small: ${nativeSt.size}`);
   }
   if (assSt.size < 100) {
     throw new Error(`ASS file too small: ${assSt.size}`);
   }
+  if (burned.overlayMp4 === mp4Path) {
+    throw new Error("potato overlay must not replace the native mp4");
+  }
 
   console.log("OK overlay e2e", {
     overlayBytes: overlaySt.size,
-    rawBytes: rawSt.size,
+    nativeBytes: nativeSt.size,
     assBytes: assSt.size,
+    potatoMp4: burned.overlayMp4,
     workDir,
   });
 }

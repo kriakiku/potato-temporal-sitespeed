@@ -236,7 +236,7 @@ Measurements (tags include `metricPrefix`, `country`, `tier`, `cacheMode`, `dire
 | `potato_websocket` | per `host`+`path`: `started` (upgrade attempts), first-frame latency |
 | `potato_http_slow` | top-5 longest HTTP start→response from Potato MITM (`rank` 1–5, scrubbed `host`/`method`/`path`, `durationMs`, `failed`) — metrics only, not on video |
 | `potato_cf_cache` | per `status` tag: raw `cf-cache-status` (`HIT`, `MISS`, `DYNAMIC`, …) or `NONE` (not Cloudflare); field `count` |
-| `potato_overlay` | Event marker counts from Potato stats (`wsMarkers` / `apiMarkers` / shown ≤6, `firstIframeMs`); `burned` always false (no custom ASS) |
+| `potato_overlay` | Event marker counts from Potato stats (`wsMarkers` / `apiMarkers` / shown ≤6, `firstIframeMs`); `burned` true when custom ASS was written to `{browser}.potato.mp4` |
 
 Host tags replace the workflow `tld` apex with `{tld}` (e.g. `api.example.com` → `api.{tld}`). Query strings never appear in tags.
 
@@ -246,9 +246,11 @@ Host tags replace the workflow `tld` apex with `{tld}` (e.g. `api.example.com` �
 
 The worker downloads [sitespeedio/url2green](https://github.com/sitespeedio/url2green) once to `{SITESPEED_RESULTS_DIR}/.url2green/url2green.json.gz` (override with `SITESPEED_URL2GREEN_PATH`) and bind-mounts that directory into the sitespeed container. We never pass `--sustainable.useGreenWebHostingAPI`.
 
-### Video timer
+### Video overlay
 
-Browsertime’s built-in timer is **on** (`--browsertime.videoParams.addTimer true`). The worker does **not** burn a custom ASS overlay onto the mp4.
+Browsertime’s built-in timer stays **on** for `{browser}.native.mp4` (`--browsertime.videoParams.addTimer true`).
+
+After measure, the worker burns a custom ASS overlay (nav / iframe / sliding WS+API markers) via ffmpeg in the sitespeed image and uploads it separately as `{browser}.potato.mp4`. The native mp4 is left unchanged. Overlay burn failure is non-fatal (native still uploads; `potato_overlay.burned` stays false).
 
 ### Fullscreen tap
 
@@ -264,6 +266,7 @@ When `S3_BUCKET` + `S3_KEY` + `S3_SECRET` are set, the worker uploads from the l
 {ARTIFACT_NAMESPACE_BASE}.{metricPrefix}.{country}.{tier}.{cacheMode}.{direct}.{isMirror}/
   chrome.native.png
   chrome.native.mp4
+  chrome.potato.mp4
   index.html
 ```
 

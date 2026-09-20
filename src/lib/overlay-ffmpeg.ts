@@ -1,4 +1,4 @@
-import { copyFile, rename, stat, writeFile } from "node:fs/promises";
+import { rename, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { buildOverlayAss } from "./overlay-ass";
 import type { OverlayTimeline } from "./overlay-timeline";
@@ -11,6 +11,8 @@ export type BurnOverlayInput = {
   workDir: string;
   timeline: OverlayTimeline;
   sitespeedImage: string;
+  /** Output filename inside workDir; default chrome.potato.mp4 */
+  outputName?: string;
   /** Optional duration override (ms); default 3 minutes */
   durationMs?: number;
 };
@@ -18,7 +20,6 @@ export type BurnOverlayInput = {
 export type BurnOverlayResult = {
   overlayMp4: string;
   assPath: string;
-  replacedOriginal: boolean;
 };
 
 /**
@@ -56,7 +57,7 @@ async function probeDurationMs(
 
 /**
  * Burn ASS overlay onto mp4 using ffmpeg from the sitespeed image.
- * Replaces the original file with the overlay result; keeps `*.raw.mp4` copy.
+ * Writes a separate output (default `chrome.potato.mp4`); leaves the source intact.
  */
 export async function burnOverlayOntoVideo(
   input: BurnOverlayInput,
@@ -64,17 +65,17 @@ export async function burnOverlayOntoVideo(
   const workDir = input.workDir;
   const inputName = basename(input.inputMp4);
   const assName = "potato-overlay.ass";
-  const outName = "potato-overlay.mp4";
-  const rawName = inputName.replace(/\.mp4$/i, "") + ".raw.mp4";
+  const outName = input.outputName ?? "chrome.potato.mp4";
+  const tmpName = "potato-overlay.tmp.mp4";
 
   const assHost = join(workDir, assName);
   const outHost = join(workDir, outName);
-  const rawHost = join(workDir, rawName);
+  const tmpHost = join(workDir, tmpName);
 
   const binds = [`${workDir}:/data`];
   const containerIn = `/data/${inputName}`;
   const containerAss = `/data/${assName}`;
-  const containerOut = `/data/${outName}`;
+  const containerTmp = `/data/${tmpName}`;
 
   let durationMs = input.durationMs;
   if (durationMs === undefined) {
@@ -91,6 +92,7 @@ export async function burnOverlayOntoVideo(
     JSON.stringify({
       msg: "Burning custom video overlay",
       input: input.inputMp4,
+      output: outHost,
       durationMs,
       ws: input.timeline.ws.length,
       api: input.timeline.api.length,
@@ -110,7 +112,7 @@ export async function burnOverlayOntoVideo(
       `ass=${containerAss}`,
       "-c:a",
       "copy",
-      containerOut,
+      containerTmp,
     ],
     binds,
   });
@@ -121,18 +123,16 @@ export async function burnOverlayOntoVideo(
     );
   }
 
-  await copyFile(input.inputMp4, rawHost);
-  await rename(outHost, input.inputMp4);
+  await rename(tmpHost, outHost);
 
-  const st = await stat(input.inputMp4);
+  const st = await stat(outHost);
   if (st.size < 1000) {
     throw new Error(`overlay mp4 looks empty (${st.size} bytes)`);
   }
 
   return {
-    overlayMp4: input.inputMp4,
+    overlayMp4: outHost,
     assPath: assHost,
-    replacedOriginal: true,
   };
 }
 

@@ -744,7 +744,11 @@ export async function findLocalAsset(
       if (n.endsWith("/index.html")) s += 20;
       return s;
     }
-    if (ext === ".mp4" && n.endsWith(".raw.mp4")) s -= 200;
+    if (ext === ".mp4") {
+      if (n.endsWith(".raw.mp4")) s -= 200;
+      if (n.endsWith(".potato.mp4") || n.endsWith("potato-overlay.mp4")) s -= 200;
+      if (n.endsWith("potato-overlay.tmp.mp4")) s -= 200;
+    }
     if (n.includes("/data/screenshots/") || n.includes("/data/video/")) s += 100;
     if (n.includes("/pages/")) s += 30;
     if (n.endsWith("/afterpagecompletecheck.png")) s += 50;

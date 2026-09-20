@@ -20,6 +20,8 @@ export type UploadLocalArtifactsInput = {
   latestPrefix: string;
   browser: string;
   connectivity: string;
+  /** Optional custom ASS-burned mp4 → `{browser}.potato.mp4` */
+  potatoMp4?: string;
 };
 
 export type UploadLocalArtifactsResult = {
@@ -123,6 +125,12 @@ export async function uploadLocalSitespeedArtifacts(
     uploads.push({
       path: mp4,
       key: `${latestPrefix}/${browser}.${connectivity}.mp4`,
+    });
+  }
+  if (input.potatoMp4) {
+    uploads.push({
+      path: input.potatoMp4,
+      key: `${latestPrefix}/${browser}.potato.mp4`,
     });
   }
   const html = await findLocalAsset(input.resultRoot, ".html");

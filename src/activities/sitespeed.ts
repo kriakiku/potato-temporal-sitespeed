@@ -22,10 +22,15 @@ import {
   lastN,
   OVERLAY_SLOT_LIMIT,
 } from "../lib/overlay-timeline";
+import {
+  burnOverlayOntoVideo,
+  overlayWorkDirFor,
+} from "../lib/overlay-ffmpeg";
 import { uploadLocalSitespeedArtifacts } from "../lib/s3-latest";
 import { podman } from "../lib/podman";
 import {
   emptySitespeedMetricsBundle,
+  findLocalAsset,
   loadSitespeedMetrics,
   type SitespeedMetricsBundle,
   type SitespeedTimingFields,
@@ -629,9 +634,9 @@ export async function runSitespeed(
     firstIframeMs: number;
     burned: boolean;
   } | undefined;
+  let potatoMp4: string | undefined;
 
-  // Event marker counts for metrics only — video uses browsertime's built-in timer.
-  heartbeat({ step: "overlay-metrics" });
+  heartbeat({ step: "overlay-burn" });
   try {
     const firstIframeMs =
       typeof metrics.browsertime.firstIframeMs === "number"
@@ -651,8 +656,32 @@ export async function runSitespeed(
       firstIframeMs: timeline.firstIframeMs,
       burned: false,
     };
+
+    const sourceMp4 = await findLocalAsset(hostResultsRoot, ".mp4");
+    if (sourceMp4) {
+      const browserSafe =
+        input.browser.replace(/[^a-zA-Z0-9_-]/g, "") || "chrome";
+      const outputName = `${browserSafe}.potato.mp4`;
+      const burned = await burnOverlayOntoVideo({
+        inputMp4: sourceMp4,
+        workDir: overlayWorkDirFor(sourceMp4),
+        timeline,
+        sitespeedImage: env.sitespeedImage,
+        outputName,
+      });
+      potatoMp4 = burned.overlayMp4;
+      overlayMeta.burned = true;
+      log.info("Burned custom potato overlay", {
+        sourceMp4,
+        potatoMp4,
+        ws: overlayMeta.wsMarkers,
+        api: overlayMeta.apiMarkers,
+      });
+    } else {
+      log.warn("No mp4 found for potato overlay burn");
+    }
   } catch (err) {
-    log.warn("Overlay metric extract failed", {
+    log.warn("Overlay burn failed", {
       err: err instanceof Error ? err.message : String(err),
     });
   }
@@ -712,6 +741,7 @@ export async function runSitespeed(
         latestPrefix: artifactNamespace,
         browser: input.browser,
         connectivity: "native",
+        potatoMp4,
       });
       s3Keys = uploaded.uploaded;
       log.info("Uploaded local sitespeed artifacts to S3", uploaded);
