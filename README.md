@@ -228,7 +228,7 @@ Browsertime’s built-in timer is **on** (`--browsertime.videoParams.addTimer tr
 
 ### Fullscreen tap
 
-Each run stages a browsertime **multi journey** (`bt-measure-journey.js`) that navigates the entry URL under `commands.measure`, waits up to 60s for `[data-test-id="fullScreen"]` (presence gate only), then **Selenium Actions-taps the viewport center** if the marker appeared (no-op if missing). Warm cache is a separate sitespeed pass with a shared Chrome profile (see above), not an in-script pre-navigate.
+Each run stages a browsertime **multi journey** (`bt-measure-journey.js`, run with `--multi`) that navigates the entry URL under `commands.measure`, waits up to 60s for `[data-test-id="fullScreen"]` (presence gate only), then **Selenium Actions-taps the viewport center** if the marker appeared (no-op if missing). Warm cache is a separate sitespeed pass with a shared Chrome profile (see above), not an in-script pre-navigate.
 
 Unset `INFLUX_WRITE_URL` → metrics emit is skipped (logged once).
 

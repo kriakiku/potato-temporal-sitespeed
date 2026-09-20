@@ -153,6 +153,9 @@ export function buildSitespeedBrowserArgs(
   }
 
   if (input.multiScriptPath) {
+    // Without --multi, sitespeed treats the .js as a URL list file →
+    // getURLs() is empty → options.urls[0] is undefined → startsWith crash.
+    cmd.push("--multi");
     if (clearCache) {
       cmd.push("--browsertime.cacheClearRaw");
     }

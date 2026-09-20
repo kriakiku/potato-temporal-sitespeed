@@ -39,6 +39,7 @@ describe("buildSitespeedBrowserArgs", () => {
       chromeUserDataDir: CONTAINER_CHROME_PROFILE,
     });
     expect(args.at(-1)).toBe("/sitespeed.io/bt-measure-journey.js");
+    expect(args).toContain("--multi");
     expect(args).not.toContain("--preURL");
     expect(args).not.toContain("--browsertime.cacheClearRaw");
     expect(args).toContain("--browsertime.timeouts.elementWait");
@@ -46,6 +47,17 @@ describe("buildSitespeedBrowserArgs", () => {
     expect(args).not.toContain("--urlAlias");
     expect(args).not.toContain("--browsertime.chrome.CPUThrottlingRate");
     expect(args).toContain(`user-data-dir=${CONTAINER_CHROME_PROFILE}`);
+  });
+
+  test("plain URL does not set --multi", () => {
+    const args = buildSitespeedBrowserArgs({
+      browser: "chrome",
+      slug: "test",
+      metricPrefix: "lobby",
+      cacheMode: "cold",
+      url: "https://example.com/",
+    });
+    expect(args).not.toContain("--multi");
   });
 
   test("plain URL keeps urlAlias", () => {
