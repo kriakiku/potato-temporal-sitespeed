@@ -311,6 +311,8 @@ export const podman = {
   async pruneStaleResources(opts: {
     containerNamePrefixes: string[];
     keepVolumes: string[];
+    /** Called between slow steps so Temporal heartbeats stay alive. */
+    onTick?: (step: string) => void;
   }): Promise<{
     removedContainers: string[];
     prunedContainers: unknown;
@@ -322,11 +324,14 @@ export const podman = {
     const d = await engine();
     const keep = new Set(opts.keepVolumes.filter(Boolean));
     const removedContainers: string[] = [];
+    const tick = (step: string) => opts.onTick?.(step);
 
     for (const prefix of opts.containerNamePrefixes) {
+      tick(`list-${prefix}`);
       const names = await this.listContainerNamesByPrefix(prefix);
       for (const name of names) {
-        await this.stopContainer(name).catch(() => undefined);
+        tick(`rm-${name}`);
+        // Force-rm only — graceful stop can hang past activity heartbeats.
         await this.removeContainer(name, true).catch(() => undefined);
         removedContainers.push(name);
       }
@@ -337,11 +342,13 @@ export const podman = {
     let prunedImages: unknown;
     let prunedBuilder: unknown;
     try {
+      tick("prune-containers");
       prunedContainers = await d.pruneContainers({});
     } catch (err) {
       throw new PodmanError("prune containers failed", err);
     }
     try {
+      tick("prune-networks");
       prunedNetworks = await d.pruneNetworks({});
     } catch (err) {
       throw new PodmanError("prune networks failed", err);
@@ -349,11 +356,13 @@ export const podman = {
 
     const removedVolumes: string[] = [];
     try {
+      tick("list-volumes");
       const listed = await d.listVolumes();
       const volumes = (listed.Volumes ?? []) as Array<{ Name?: string }>;
       for (const v of volumes) {
         const name = v.Name?.trim();
         if (!name || keep.has(name)) continue;
+        tick(`rm-volume-${name}`);
         try {
           await d.getVolume(name).remove({ force: true });
           removedVolumes.push(name);
@@ -366,18 +375,21 @@ export const podman = {
     }
 
     try {
+      tick("prune-images");
       // Default dangling=true: only unused untagged layers (keep Potato/sitespeed tags).
       prunedImages = await d.pruneImages({});
     } catch (err) {
       throw new PodmanError("prune images failed", err);
     }
     try {
+      tick("prune-builder");
       prunedBuilder = await d.pruneBuilder({});
     } catch {
       // Podman may not support build prune — non-fatal
       prunedBuilder = { skipped: true };
     }
 
+    tick("prune-done");
     return {
       removedContainers,
       prunedContainers,

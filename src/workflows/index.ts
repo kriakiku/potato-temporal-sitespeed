@@ -35,14 +35,23 @@ const {
   startPotato,
   waitPotatoHealthy,
   stopPotato,
-  stopAllPotatoContainers,
-  pruneEngineResources,
+  resetPotatoStats,
   refreshPotatoCatalog,
   refreshPotatoBaseline,
-  resetPotatoStats,
 } = proxyActivities<typeof activities>({
   startToCloseTimeout: "30 minutes",
   heartbeatTimeout: "2 minutes",
+  retry: {
+    maximumAttempts: 1,
+  },
+});
+
+/** Cleanup can be slow on a busy Podman host — longer heartbeat window. */
+const { stopAllPotatoContainers, pruneEngineResources } = proxyActivities<
+  typeof activities
+>({
+  startToCloseTimeout: "30 minutes",
+  heartbeatTimeout: "5 minutes",
   retry: {
     maximumAttempts: 1,
   },

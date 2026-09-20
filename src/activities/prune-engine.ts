@@ -25,13 +25,15 @@ const KEEP_NEWEST_RESULT_DIRS = 20;
  */
 export async function pruneEngineResources(): Promise<PruneEngineResourcesResult> {
   const env = getEnv();
-  heartbeat({ step: "prune-engine" });
+  heartbeat({ step: "prune-engine-start" });
 
   const engine = await podman.pruneStaleResources({
     containerNamePrefixes: ["potato-", "sitespeed-"],
     keepVolumes: [env.potatoDataVolume],
+    onTick: (step) => heartbeat({ step: `prune-engine-${step}` }),
   });
 
+  heartbeat({ step: "prune-result-dirs" });
   const removedResultDirs = await pruneOldResultDirs(
     env.sitespeedResultsDir,
     KEEP_NEWEST_RESULT_DIRS,
@@ -46,6 +48,7 @@ export async function pruneEngineResources(): Promise<PruneEngineResourcesResult
     removedVolumes: result.removedVolumes.length,
     removedResultDirs: result.removedResultDirs.length,
   });
+  heartbeat({ step: "prune-engine-done" });
   return result;
 }
 
@@ -62,8 +65,14 @@ async function pruneOldResultDirs(
 
   const dirs: Array<{ name: string; mtimeMs: number }> = [];
   for (const name of entries) {
-    // Keep autostart jobs/state files and non-dirs.
-    if (name.startsWith("autostart-") || name.startsWith(".")) continue;
+    // Keep config/autostart state files and non-dirs.
+    if (
+      name.startsWith("autostart-") ||
+      name === "config.json" ||
+      name.startsWith(".")
+    ) {
+      continue;
+    }
     const full = join(resultsDir, name);
     try {
       const st = await stat(full);
@@ -77,7 +86,15 @@ async function pruneOldResultDirs(
   dirs.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const toRemove = dirs.slice(keepNewest);
   const removed: string[] = [];
-  for (const d of toRemove) {
+  for (let i = 0; i < toRemove.length; i++) {
+    const d = toRemove[i]!;
+    if (i % 5 === 0) {
+      heartbeat({
+        step: "prune-result-dir",
+        index: i,
+        total: toRemove.length,
+      });
+    }
     const full = join(resultsDir, d.name);
     try {
       await rm(full, { recursive: true, force: true });

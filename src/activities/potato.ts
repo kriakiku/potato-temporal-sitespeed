@@ -1,5 +1,5 @@
 import { existsSync, statSync } from "node:fs";
-import { heartbeat } from "@temporalio/activity";
+import { heartbeat, log } from "@temporalio/activity";
 import { getEnv } from "../lib/env";
 import { podman } from "../lib/podman";
 import { buildShapeExclude } from "../lib/shape-exclude";
@@ -303,15 +303,27 @@ export async function stopPotato(handle: PotatoHandle): Promise<void> {
 /**
  * Stop+rm every PotatoNetwork sidecar (long-lived country + ephemeral leftovers).
  * Used by potatoRefreshWorkflow to avoid memory leaks before catalog refresh.
+ * Force-rm only (no graceful stop) and heartbeats so Temporal does not kill us
+ * when the engine is slow or many leftovers exist.
  */
 export async function stopAllPotatoContainers(): Promise<{ stopped: string[] }> {
+  heartbeat({ step: "stop-all-potato-list" });
   const names = await podman.listContainerNamesByPrefix(POTATO_CONTAINER_PREFIX);
   const stopped: string[] = [];
-  for (const name of names) {
-    await podman.stopContainer(name).catch(() => undefined);
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i]!;
+    heartbeat({
+      step: "stop-all-potato-rm",
+      index: i,
+      total: names.length,
+      name,
+    });
+    // force remove implies stop — skip graceful stop (can hang > heartbeat).
     await podman.removeContainer(name, true).catch(() => undefined);
     stopped.push(name);
   }
+  log.info("Stopped all potato containers", { count: stopped.length, stopped });
+  heartbeat({ step: "stop-all-potato-done", count: stopped.length });
   return { stopped };
 }
 
