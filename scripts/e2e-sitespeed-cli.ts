@@ -130,12 +130,9 @@ async function main(): Promise<void> {
     clearCache: true,
   });
 
-  // Slim CI flags: drop CPU/axe/sustainable (still exercises --multi + journey + cacheClearRaw)
+  // Slim CI flags: drop CPU/axe (still exercises --multi + journey + cacheClearRaw)
   const slim = args.filter(
-    (a) =>
-      a !== "--cpu" &&
-      a !== "--sustainable.enable" &&
-      a !== "--axe.enable",
+    (a) => a !== "--cpu" && a !== "--axe.enable",
   );
   if (!slim.includes("--multi")) {
     fail("buildSitespeedBrowserArgs must include --multi for journey scripts");

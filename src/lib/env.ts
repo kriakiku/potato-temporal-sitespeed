@@ -102,12 +102,6 @@ export type WorkerEnv = {
    */
   sitespeedResultsDir: string;
   /**
-   * Absolute engine-host path to url2green.json.gz (or its parent directory).
-   * Default: `{SITESPEED_RESULTS_DIR}/.url2green/url2green.json.gz`.
-   * Bind-mounted into sitespeed for local greencheck (no Green Web API).
-   */
-  sitespeedUrl2GreenPath?: string;
-  /**
    * HTTP URL for Influx line protocol writes (VictoriaMetrics `/write`,
    * cluster `/insert/.../influx/write`, etc.). Unset → skip metric emit.
    */
@@ -192,7 +186,6 @@ export function getEnv(): WorkerEnv {
       "SITESPEED_RESULTS_DIR",
       "/tmp/potato-sitespeed-results",
     )!,
-    sitespeedUrl2GreenPath: optional("SITESPEED_URL2GREEN_PATH"),
     influxWriteUrl: optional("INFLUX_WRITE_URL"),
     influxWriteUsername: optional("INFLUX_WRITE_USERNAME"),
     influxWritePassword: optional("INFLUX_WRITE_PASSWORD"),
@@ -220,14 +213,6 @@ export function assertExportConfig(env: WorkerEnv): void {
   if (!env.sitespeedResultsDir.startsWith("/")) {
     throw new Error(
       `SITESPEED_RESULTS_DIR must be an absolute path on the engine host (got: ${env.sitespeedResultsDir})`,
-    );
-  }
-  if (
-    env.sitespeedUrl2GreenPath &&
-    !env.sitespeedUrl2GreenPath.startsWith("/")
-  ) {
-    throw new Error(
-      `SITESPEED_URL2GREEN_PATH must be an absolute path (got: ${env.sitespeedUrl2GreenPath})`,
     );
   }
 }

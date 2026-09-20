@@ -20,7 +20,7 @@ Activities (visible in Temporal UI):
 
 1. `resolveEntryUrl` — demo auth APIs (`demo.{tld}` / optional `lobby.{tld}`) **before** Potato starts (auth is not shaped)
 2. `ensurePotatoVolume` / `startPotato` / `waitPotatoHealthy`
-3. `prepareSitespeedRun` — result dir, url2green, browsertime scripts, namespace/slug
+3. `prepareSitespeedRun` — result dir, browsertime scripts, namespace/slug
 4. Optional warm path: `warmupSitespeedCache` → `resetPotatoStats`
 5. `measureSitespeed` — `sitespeedio/sitespeed.io:40.0.0-plus1` once (`-n 1`) with `--network container:<potato>`, `--video`, multi journey, etc.
 6. `parseSitespeedMetrics` → `enrichFromPotato` (while Potato is still up)
@@ -231,7 +231,7 @@ Measurements (tags include `metricPrefix`, `country`, `tier`, `cacheMode`, `dire
 | `potato_coach` | `score`, `performanceScore`, `bestpracticeScore`, `privacyScore`, DOM info |
 | `potato_axe` | `violationsCritical` / `Serious` / `Moderate` / `Minor` |
 | `potato_lighthouse` | Category scores 0–100 + `audit_first_contentful_paint` (and LCP/TBT/CLS) |
-| `potato_sustainable` | `co2PerPageView`, `co2FirstParty`, `co2ThirdParty`, `totalCO2` (hosting check uses **local** url2green, not the Green Web API) |
+| `potato_sustainable` | _(disabled — Green Web / sustainable plugin not run)_ |
 | `potato_thirdparty` | `requestsTotal` / `requestsPercentage`; tagged `thirdPartyCategory` / `tool` |
 | `potato_profile` | `delayMs`, Mbps, `lossPercent`, `cfRttMs`, `hostCfRttMs`, … |
 | `potato_dns` | per-`domain`: `count`, `errorCount`, `latencyAvgMs`, … |
@@ -246,11 +246,9 @@ Measurements (tags include `metricPrefix`, `country`, `tier`, `cacheMode`, `dire
 
 Host tags replace the workflow `tld` apex with `{tld}` (e.g. `api.example.com` → `api.{tld}`). Query strings never appear in tags.
 
-### Sustainable greencheck (local only)
+### Sustainable / Green Web
 
-`--sustainable.enable` is on. Official `sitespeedio/sitespeed.io:40+` images **omit** `url2green.json.gz` (~87MB) unless built with `DOWNLOAD_URL2GREEN=true`. Without that file, `@tgwf/co2` treats empty data as “use API” and calls `api.thegreenwebfoundation.org/v2/greencheckmulti/…`.
-
-The worker downloads [sitespeedio/url2green](https://github.com/sitespeedio/url2green) once to `{SITESPEED_RESULTS_DIR}/.url2green/url2green.json.gz` (override with `SITESPEED_URL2GREEN_PATH`) and bind-mounts that directory into the sitespeed container. We never pass `--sustainable.useGreenWebHostingAPI`.
+The sitespeed **sustainable** plugin is **off** (no `--sustainable.enable`). We do not call `api.thegreenwebfoundation.org` and do not ship/bind `url2green.json.gz`.
 
 ### Video overlay
 
@@ -335,7 +333,6 @@ All config is process env (no `.env` file).
 | `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse |
 | `SITESPEED_MAX_ATTEMPTS` | `1` | Temporal activity retries for `measureSitespeed` / `warmupSitespeedCache` |
 | `SITESPEED_RESULTS_DIR` | `/tmp/potato-sitespeed-results` | Absolute **engine-host** path; when worker is containerized, bind-mount the same path (see Local result files) |
-| `SITESPEED_URL2GREEN_PATH` | `{SITESPEED_RESULTS_DIR}/.url2green/url2green.json.gz` | Absolute path to url2green `.gz` (or its directory) for local sustainable greencheck |
 | `INFLUX_WRITE_URL` | — | HTTP write URL (e.g. `http://vm:8428/write`). Skip emit if unset |
 | `INFLUX_WRITE_USERNAME` / `INFLUX_WRITE_PASSWORD` | — | Optional Basic auth |
 | `INFLUX_WRITE_TOKEN` | — | Optional Bearer token (wins over Basic) |

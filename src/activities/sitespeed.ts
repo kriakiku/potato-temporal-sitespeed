@@ -44,11 +44,6 @@ import {
   potatoOverlayResultPath,
 } from "../lib/sitespeed-run-paths";
 import {
-  ensureUrl2GreenFile,
-  resolveUrl2GreenHostPath,
-  sitespeedUrl2GreenBind,
-} from "../lib/url2green";
-import {
   buildArtifactNamespace,
   buildResultSlug,
   metricTagsFromDims,
@@ -187,11 +182,6 @@ async function runSitespeedContainer(opts: {
 }): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const env = getEnv();
   const { handle } = opts;
-  const url2GreenGz = resolveUrl2GreenHostPath(
-    env.sitespeedResultsDir,
-    env.sitespeedUrl2GreenPath,
-  );
-  const url2GreenBind = sitespeedUrl2GreenBind(url2GreenGz);
 
   const cmd = buildSitespeedBrowserArgs({
     browser: handle.browser,
@@ -244,7 +234,6 @@ async function runSitespeedContainer(opts: {
         binds: [
           `${env.potatoDataVolume}:/potato-data:ro`,
           `${handle.runRoot}:/sitespeed.io`,
-          url2GreenBind,
         ],
         env: {
           NODE_EXTRA_CA_CERTS: "/potato-data/ca/potatonetwork-ca.pem",
@@ -282,24 +271,6 @@ export async function prepareSitespeedRun(
   await mkdir(runRoot, { recursive: true });
   if (input.cacheMode === "warm") {
     await mkdir(join(runRoot, "chrome-profile"), { recursive: true });
-  }
-
-  const url2GreenGz = resolveUrl2GreenHostPath(
-    env.sitespeedResultsDir,
-    env.sitespeedUrl2GreenPath,
-  );
-  try {
-    const u2g = await ensureUrl2GreenFile(url2GreenGz);
-    log.info("url2green ready for local greencheck", {
-      path: u2g.path,
-      downloaded: u2g.downloaded,
-    });
-  } catch (err) {
-    throw new Error(
-      `Failed to prepare local url2green (needed so sustainable does not call the Green Web API): ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
   }
 
   try {

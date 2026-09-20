@@ -144,12 +144,8 @@ export function buildSitespeedBrowserArgs(
     // Opt-in SwiftShader for WebGL (Chromium no longer falls back silently)
     "--browsertime.chrome.args",
     "enable-unsafe-swiftshader",
-    // Chrome timeline + long tasks; sustainability + axe plugins
+    // Chrome timeline + long tasks; axe plugin (sustainable/Green Web disabled)
     "--cpu",
-    // Local greencheck via bind-mounted url2green.json.gz (see url2green.ts).
-    // Never pass --sustainable.useGreenWebHostingAPI — without the local file
-    // @tgwf/co2 falls through to greencheckmulti HTTP.
-    "--sustainable.enable",
     "--axe.enable",
     "--browsertime.timeouts.pageCompleteCheck",
     "180000",
