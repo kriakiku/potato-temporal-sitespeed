@@ -54,12 +54,6 @@ jobs:
           docker run --rm --entrypoint bash "${IMAGE}:${TAG}" -c \
             'fc-list :lang=bn | grep -qi bengali'
 
-      - name: Make package public
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Public repo companion image — hosts/CI can pull without auth.
-          gh api --method PUT \
-            -H "Accept: application/vnd.github+json" \
-            "/user/packages/container/${IMAGE##*/}/visibility" \
-            -f visibility=public
+      # GITHUB_TOKEN cannot flip package visibility (API 404). After the first
+      # publish, set the GHCR package to Public once:
+      # https://github.com/users/kriakiku/packages/container/package/potato-sitespeed.io

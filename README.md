@@ -389,7 +389,7 @@ All config is process env (no `.env` file).
 | `POTATO_RULES_EXPR` | — | Absolute **engine-host** path to `rules.expr`; bind-mounted to `/data/rules.expr` |
 | `POTATONETWORK_API_TOKEN` | — | Optional |
 | `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Influx write host |
-| `SITESPEED_IMAGE` | `ghcr.io/kriakiku/potato-sitespeed.io:40.0.0-plus1` | sitespeed.io plus1 + Noto fonts (Bengali etc.). Rebuild/publish via Actions → **Publish sitespeed image** (`workflow_dispatch`). Upstream base: `sitespeedio/sitespeed.io:40.0.0-plus1`. Worker installs Potato MITM CA + `ignore-certificate-errors` / `disable-quic`; Chrome also gets SwiftShader WebGPU/WebGL args |
+| `SITESPEED_IMAGE` | `ghcr.io/kriakiku/potato-sitespeed.io:40.0.0-plus1` | sitespeed.io plus1 + Noto fonts (Bengali etc.). Rebuild via Actions → **Publish sitespeed image** (`workflow_dispatch`). After the first publish, set the GHCR package visibility to **Public** (Actions token cannot). Upstream base: `sitespeedio/sitespeed.io:40.0.0-plus1`. Worker installs Potato MITM CA + `ignore-certificate-errors` / `disable-quic`; Chrome also gets SwiftShader WebGPU/WebGL args |
 | `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse |
 | `SITESPEED_RESULTS_DIR` | `/tmp/potato-sitespeed-results` | Absolute **engine-host** path; when worker is containerized, bind-mount the same path (see Local result files) |
 | `CONFIG_PATH` | `{SITESPEED_RESULTS_DIR}/config.json` | Potato config JSON (`{ "autostart": [ SiteSpeedTestInput, … ] }`) |
