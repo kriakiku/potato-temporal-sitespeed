@@ -33,7 +33,7 @@ Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potat
 
 ### `potatoRefreshWorkflow`
 
-1. `stopAllPotatoContainers` — tear down every `potato-*` sidecar
+1. `stopAllPotatoContainers` — tear down PotatoNetwork sidecars (`potato-*`, excluding `potato-temporal-*` worker)
 2. `pruneEngineResources` — remove leftover `potato-*` / `sitespeed-*` containers, unused networks/volumes (keeps the Potato data volume), dangling images, build cache, and old local result dirs (keeps 20 newest). **Does not** pull images.
 3. Short-lived passthrough Potato on the shared volume → `POST /v1/catalog/refresh` + `POST /v1/baseline/probe`, then stop that container
 

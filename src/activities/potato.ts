@@ -29,6 +29,18 @@ export const POTATO_RULES_EXPR_CONTAINER_PATH = "/data/rules.expr";
 /** Long-lived per-location sidecars share this prefix (also matches ephemeral leftovers). */
 export const POTATO_CONTAINER_PREFIX = "potato-";
 
+/**
+ * True for PotatoNetwork sidecars we may tear down on refresh.
+ * Excludes the worker itself (`potato-temporal-sitespeed`) and any
+ * `potato-temporal-*` tooling — same prefix, must never be force-rm'd
+ * from inside the worker (hangs Podman API / kills the activity).
+ */
+export function isPotatoNetworkSidecarName(name: string): boolean {
+  if (!name.startsWith(POTATO_CONTAINER_PREFIX)) return false;
+  if (name.startsWith("potato-temporal")) return false;
+  return true;
+}
+
 function containerNameFor(runId: string, prefix = "potato"): string {
   const safe = runId.replace(/[^a-zA-Z0-9_.-]/g, "").slice(0, 48);
   return `${prefix}-${safe || Date.now()}`;
@@ -305,10 +317,18 @@ export async function stopPotato(handle: PotatoHandle): Promise<void> {
  * Used by potatoRefreshWorkflow to avoid memory leaks before catalog refresh.
  * Force-rm only (no graceful stop) and heartbeats so Temporal does not kill us
  * when the engine is slow or many leftovers exist.
+ * Never touches `potato-temporal-*` (the worker).
  */
 export async function stopAllPotatoContainers(): Promise<{ stopped: string[] }> {
   heartbeat({ step: "stop-all-potato-list" });
-  const names = await podman.listContainerNamesByPrefix(POTATO_CONTAINER_PREFIX);
+  const listed = await podman.listContainerNamesByPrefix(POTATO_CONTAINER_PREFIX, {
+    onTick: () => heartbeat({ step: "stop-all-potato-list", waiting: true }),
+  });
+  const names = listed.filter(isPotatoNetworkSidecarName);
+  const skipped = listed.filter((n) => !isPotatoNetworkSidecarName(n));
+  if (skipped.length) {
+    log.info("Skipping non-sidecar potato-* containers", { skipped });
+  }
   const stopped: string[] = [];
   for (let i = 0; i < names.length; i++) {
     const name = names[i]!;
@@ -319,7 +339,24 @@ export async function stopAllPotatoContainers(): Promise<{ stopped: string[] }> 
       name,
     });
     // force remove implies stop — skip graceful stop (can hang > heartbeat).
-    await podman.removeContainer(name, true).catch(() => undefined);
+    await podman
+      .removeContainer(name, true, {
+        timeoutMs: 60_000,
+        onTick: () =>
+          heartbeat({
+            step: "stop-all-potato-rm",
+            index: i,
+            total: names.length,
+            name,
+            waiting: true,
+          }),
+      })
+      .catch((err) => {
+        log.warn("Failed to remove potato sidecar", {
+          name,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
     stopped.push(name);
   }
   log.info("Stopped all potato containers", { count: stopped.length, stopped });

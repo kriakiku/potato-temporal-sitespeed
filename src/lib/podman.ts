@@ -165,6 +165,39 @@ function toCreateOptions(
   };
 }
 
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new PodmanError(`timeout after ${ms}ms: ${label}`));
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+function withTicks<T>(
+  promise: Promise<T>,
+  onTick: (() => void) | undefined,
+  intervalMs = 10_000,
+): Promise<T> {
+  if (!onTick) return promise;
+  const tick = setInterval(() => onTick(), intervalMs);
+  onTick();
+  return promise.finally(() => clearInterval(tick));
+}
+
 export const podman = {
   /** Pull (or refresh) an image tag from the registry. */
   async pullImage(image: string): Promise<void> {
@@ -229,9 +262,20 @@ export const podman = {
     }
   },
 
-  async removeContainer(nameOrId: string, force = true): Promise<void> {
+  async removeContainer(
+    nameOrId: string,
+    force = true,
+    opts?: { timeoutMs?: number; onTick?: () => void },
+  ): Promise<void> {
+    const timeoutMs = opts?.timeoutMs ?? 60_000;
     try {
-      await (await engine()).getContainer(nameOrId).remove({ force, v: true });
+      const remove = (await engine())
+        .getContainer(nameOrId)
+        .remove({ force, v: true });
+      await withTicks(
+        withTimeout(remove, timeoutMs, `container rm ${nameOrId}`),
+        opts?.onTick,
+      );
     } catch (err: unknown) {
       const status =
         err && typeof err === "object" && "statusCode" in err
@@ -284,9 +328,34 @@ export const podman = {
   },
 
   /** Container names (no leading slash) that start with `prefix`. */
-  async listContainerNamesByPrefix(prefix: string): Promise<string[]> {
+  async listContainerNamesByPrefix(
+    prefix: string,
+    opts?: { onTick?: () => void; timeoutMs?: number },
+  ): Promise<string[]> {
+    const timeoutMs = opts?.timeoutMs ?? 60_000;
     try {
-      const list = await (await engine()).listContainers({ all: true });
+      const d = await engine();
+      // Prefer name filter; fall back to full list if the engine rejects filters.
+      let list: Dockerode.ContainerInfo[];
+      try {
+        list = await withTicks(
+          withTimeout(
+            d.listContainers({ all: true, filters: { name: [prefix] } }),
+            timeoutMs,
+            `list containers prefix=${prefix}`,
+          ),
+          opts?.onTick,
+        );
+      } catch {
+        list = await withTicks(
+          withTimeout(
+            d.listContainers({ all: true }),
+            timeoutMs,
+            `list containers (unfiltered)`,
+          ),
+          opts?.onTick,
+        );
+      }
       const out: string[] = [];
       for (const c of list) {
         for (const raw of c.Names ?? []) {
@@ -311,6 +380,8 @@ export const podman = {
   async pruneStaleResources(opts: {
     containerNamePrefixes: string[];
     keepVolumes: string[];
+    /** Skip containers that must stay (e.g. the Temporal worker). */
+    keepContainerName?: (name: string) => boolean;
     /** Called between slow steps so Temporal heartbeats stay alive. */
     onTick?: (step: string) => void;
   }): Promise<{
@@ -328,11 +399,20 @@ export const podman = {
 
     for (const prefix of opts.containerNamePrefixes) {
       tick(`list-${prefix}`);
-      const names = await this.listContainerNamesByPrefix(prefix);
+      const names = await this.listContainerNamesByPrefix(prefix, {
+        onTick: () => tick(`list-${prefix}`),
+      });
       for (const name of names) {
+        if (opts.keepContainerName?.(name)) {
+          tick(`keep-${name}`);
+          continue;
+        }
         tick(`rm-${name}`);
         // Force-rm only — graceful stop can hang past activity heartbeats.
-        await this.removeContainer(name, true).catch(() => undefined);
+        await this.removeContainer(name, true, {
+          timeoutMs: 60_000,
+          onTick: () => tick(`rm-${name}`),
+        }).catch(() => undefined);
         removedContainers.push(name);
       }
     }

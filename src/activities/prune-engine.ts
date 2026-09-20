@@ -1,6 +1,7 @@
 import { readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { heartbeat, log } from "@temporalio/activity";
+import { isPotatoNetworkSidecarName } from "./potato";
 import { getEnv } from "../lib/env";
 import { podman } from "../lib/podman";
 
@@ -29,6 +30,9 @@ export async function pruneEngineResources(): Promise<PruneEngineResourcesResult
 
   const engine = await podman.pruneStaleResources({
     containerNamePrefixes: ["potato-", "sitespeed-"],
+    // Never force-rm the worker (potato-temporal-sitespeed).
+    keepContainerName: (name) =>
+      name.startsWith("potato-") ? !isPotatoNetworkSidecarName(name) : false,
     keepVolumes: [env.potatoDataVolume],
     onTick: (step) => heartbeat({ step: `prune-engine-${step}` }),
   });
