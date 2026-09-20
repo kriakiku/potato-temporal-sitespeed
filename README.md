@@ -41,6 +41,18 @@ Use a stable workflow id (`potato-refresh`). Does not recreate the Temporal work
 
 > Temporal TypeScript on Bun is **experimental** (SDK ≥ 1.15). Prefer a dedicated task queue.
 
+## E2E: sitespeed CLI (CI)
+
+Smoke on the real `sitespeedio/sitespeed.io` image with the same `buildSitespeedBrowserArgs` + staged journey (`--multi`) as production. No Potato, no live session — catches `startsWith` / missing-script regressions.
+
+```bash
+bun run e2e:sitespeed-cli
+```
+
+Optional: `SITESPEED_IMAGE`, `SITESPEED_E2E_URL` (default `https://kriakiku.github.io/potato-network/`), `E2E_OUT` (default `.e2e-cli-out`), `CONTAINER_ENGINE=docker|podman`.
+
+Runs on every CI push/PR and again before GHCR publish.
+
 ## E2E: black screenshot check
 
 Runs sitespeed through **PotatoNetwork** (same `--network container:…` + MITM CA install as production), then fails if the page screenshot is ≥ 92% near-black.
@@ -68,7 +80,7 @@ Optional env: `POTATO_IMAGE`, `SITESPEED_IMAGE`, `E2E_BLACK_THRESHOLD` (default 
 | FAIL with `E2E_PLAIN=1` | Chrome/Xvfb capture, expired session, or WebGL/canvas |
 | sitespeed exit ≠ 0 | Page load / UrlLoadError — check container logs |
 
-Not run in CI (needs Docker + a live session URL).
+Not run in CI (needs a live session URL). Use `e2e:sitespeed-cli` for deploy-gate smoke.
 
 ## E2E: overlay libs (optional)
 
@@ -228,7 +240,7 @@ Browsertime’s built-in timer is **on** (`--browsertime.videoParams.addTimer tr
 
 ### Fullscreen tap
 
-Each run stages a browsertime **multi journey** (`bt-measure-journey.js`, run with `--multi`) that navigates the entry URL under `commands.measure`, waits up to 60s for `[data-test-id="fullScreen"]` (presence gate only), then **Selenium Actions-taps the viewport center** if the marker appeared (no-op if missing). Warm cache is a separate sitespeed pass with a shared Chrome profile (see above), not an in-script pre-navigate.
+Each run stages a browsertime **multi journey** (`bt-measure-journey.js`, run with `--multi`) that navigates the entry URL under `commands.measure`, waits up to 10s for `[data-test-id="fullScreen"]` (presence gate only), then **Selenium Actions-taps the viewport center** if the marker appeared (no-op if missing). Warm cache is a separate sitespeed pass with a shared Chrome profile (see above), not an in-script pre-navigate.
 
 Unset `INFLUX_WRITE_URL` → metrics emit is skipped (logged once).
 

@@ -17,7 +17,7 @@ export type MeasureJourneyInput = {
 const FULLSCREEN_SELECTOR = '[data-test-id="fullScreen"]';
 
 export function buildMeasureJourneyScript(input: MeasureJourneyInput): string {
-  const waitMs = input.fullscreenWaitMs ?? 60_000;
+  const waitMs = input.fullscreenWaitMs ?? 10_000;
   return `/**
  * Auto-generated browsertime journey (do not edit by hand).
  * Measure ${JSON.stringify(input.alias)}; if ${FULLSCREEN_SELECTOR} appears, Actions-tap viewport center.

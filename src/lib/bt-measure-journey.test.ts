@@ -30,6 +30,7 @@ describe("buildMeasureJourneyScript", () => {
     });
     expect(src).toContain("await commands.measure.start(alias);");
     expect(src).toContain("await commands.navigate(url);");
+    expect(src).toContain("var fullscreenWaitMs = 10000;");
     // No pre-measure warm navigate
     const beforeMeasure = src.split("measure.start")[0] ?? "";
     expect(beforeMeasure).not.toContain("commands.navigate");

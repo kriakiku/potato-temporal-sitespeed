@@ -157,14 +157,17 @@ export function buildSitespeedBrowserArgs(
     // getURLs() is empty → options.urls[0] is undefined → startsWith crash.
     cmd.push("--multi");
     if (clearCache) {
-      cmd.push("--browsertime.cacheClearRaw");
+      // Must be =true (or "true" as next argv). A bare --browsertime.cacheClearRaw
+      // is not always registered as boolean at the sitespeed CLI layer and will
+      // swallow the following positional (journey path / URL).
+      cmd.push("--browsertime.cacheClearRaw=true");
     }
     cmd.push(input.multiScriptPath);
   } else if (!clearCache) {
     cmd.push("--preURL", input.url);
     cmd.push(input.url);
   } else {
-    cmd.push("--browsertime.cacheClearRaw");
+    cmd.push("--browsertime.cacheClearRaw=true");
     cmd.push(input.url);
   }
 

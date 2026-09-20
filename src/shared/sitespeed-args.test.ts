@@ -23,7 +23,26 @@ describe("buildSitespeedBrowserArgs", () => {
     expect(args).toContain("--browsertime.script");
     expect(args).toContain("/sitespeed.io/bt-first-iframe.js");
     expect(args.at(-1)).toBe("https://example.com/");
-    expect(args).toContain("--browsertime.cacheClearRaw");
+    expect(args).toContain("--browsertime.cacheClearRaw=true");
+    expect(args).not.toContain("--browsertime.cacheClearRaw");
+  });
+
+  test("multi journey cold uses cacheClearRaw=true so path is not swallowed", () => {
+    const args = buildSitespeedBrowserArgs({
+      browser: "chrome",
+      slug: "test",
+      metricPrefix: "lobby",
+      cacheMode: "cold",
+      url: "https://example.com/",
+      multiScriptPath: "/sitespeed.io/bt-measure-journey.js",
+    });
+    expect(args).toContain("--multi");
+    expect(args).toContain("--browsertime.cacheClearRaw=true");
+    expect(args.at(-1)).toBe("/sitespeed.io/bt-measure-journey.js");
+    const clearIdx = args.indexOf("--browsertime.cacheClearRaw=true");
+    const multiIdx = args.indexOf("--multi");
+    expect(clearIdx).toBeGreaterThan(multiIdx);
+    expect(clearIdx).toBeLessThan(args.length - 1);
   });
 
   test("multi journey replaces URL and skips preURL", () => {
@@ -42,6 +61,7 @@ describe("buildSitespeedBrowserArgs", () => {
     expect(args).toContain("--multi");
     expect(args).not.toContain("--preURL");
     expect(args).not.toContain("--browsertime.cacheClearRaw");
+    expect(args).not.toContain("--browsertime.cacheClearRaw=true");
     expect(args).toContain("--browsertime.timeouts.elementWait");
     expect(args).toContain("60000");
     expect(args).not.toContain("--urlAlias");

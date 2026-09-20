@@ -27,6 +27,12 @@ jobs:
       - name: Unit tests
         run: bun test
 
+      - name: Pull sitespeed image
+        run: docker pull sitespeedio/sitespeed.io:40.0.0-plus1
+
+      - name: E2E sitespeed CLI (journey + --multi)
+        run: bun run e2e:sitespeed-cli
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Build image
