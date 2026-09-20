@@ -19,7 +19,7 @@ Treat this repo as a reference integration, not a product.
 2. Ensures a shared volume for Potato catalog / baseline / MITM CA
 3. Boots PotatoNetwork with `country` + `tier` from the workflow input (crons off)
 4. Runs `sitespeedio/sitespeed.io:40.0.0-plus1` once (`-n 1`) with `--network container:<potato>`, bind-mounted result dir, `--plugins.add analysisstorer`, `--video`, `--browsertime.videoParams.addTimer true`, browsertime `--script` for first-iframe timing, and a **multi journey** that taps `[data-test-id="fullScreen"]` when present (gate runs before pageCompleteCheck). For `cacheMode=warm`, runs a lighter warmup sitespeed first (shared Chrome `user-data-dir`), then `POST /v1/stats/reset`, then the measure run
-5. Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), `--cpu` / `--sustainable.enable` / `--axe.enable`, optional `cpuThrottlingRate`, `cacheMode` cold|warm
+5. Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), `--cpu` / `--sustainable.enable` / `--axe.enable`, WebGPU/WebGL via SwiftShader (`enable-unsafe-webgpu`, `use-webgpu-adapter=swiftshader`, …), optional `cpuThrottlingRate`, `cacheMode` cold|warm
 6. Worker post-process: Influx metrics write + optional S3 upload (video keeps browsertime timer)
 7. Tears down the Potato container
 
@@ -325,7 +325,7 @@ All config is process env (no `.env` file).
 | `POTATO_RULES_EXPR` | — | Absolute **engine-host** path to `rules.expr`; bind-mounted to `/data/rules.expr` |
 | `POTATONETWORK_API_TOKEN` | — | Optional |
 | `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Influx write host |
-| `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse. Worker installs Potato MITM CA + `ignore-certificate-errors` / `disable-quic` |
+| `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse. Worker installs Potato MITM CA + `ignore-certificate-errors` / `disable-quic`; Chrome also gets SwiftShader WebGPU/WebGL args |
 | `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse |
 | `SITESPEED_MAX_ATTEMPTS` | `1` | Temporal activity retries for `runSitespeed` |
 | `SITESPEED_RESULTS_DIR` | `/tmp/potato-sitespeed-results` | Absolute **engine-host** path; when worker is containerized, bind-mount the same path (see Local result files) |

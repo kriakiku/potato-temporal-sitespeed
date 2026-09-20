@@ -30,6 +30,9 @@ describe("buildSitespeedBrowserArgs", () => {
     expect(args).toContain("--browsertime.cacheClearRaw=true");
     expect(args).not.toContain("--browsertime.cacheClearRaw");
     expect(args).toContain("--visualElements");
+    expect(args).toContain("enable-unsafe-webgpu");
+    expect(args).toContain("use-webgpu-adapter=swiftshader");
+    expect(args).toContain("enable-unsafe-swiftshader");
   });
 
   test("firstPartyTld adds --firstParty regex; warmup without video skips visualElements", () => {

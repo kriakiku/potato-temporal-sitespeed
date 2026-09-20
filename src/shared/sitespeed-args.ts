@@ -124,6 +124,23 @@ export function buildSitespeedBrowserArgs(
     "allow-insecure-localhost",
     "--browsertime.chrome.args",
     "disable-quic",
+    // WebGPU + WebGL in container (no /dev/dri): SwiftShader Vulkan path.
+    // Without enable-unsafe-webgpu, Linux/Xvfb Chrome often returns no adapter.
+    "--browsertime.chrome.args",
+    "enable-unsafe-webgpu",
+    "--browsertime.chrome.args",
+    "enable-features=Vulkan",
+    "--browsertime.chrome.args",
+    "use-angle=vulkan",
+    "--browsertime.chrome.args",
+    "use-vulkan=swiftshader",
+    "--browsertime.chrome.args",
+    "use-webgpu-adapter=swiftshader",
+    "--browsertime.chrome.args",
+    "disable-vulkan-surface",
+    // Opt-in SwiftShader for WebGL (Chromium no longer falls back silently)
+    "--browsertime.chrome.args",
+    "enable-unsafe-swiftshader",
     // Chrome timeline + long tasks; sustainability + axe plugins
     "--cpu",
     // Local greencheck via bind-mounted url2green.json.gz (see url2green.ts).
