@@ -251,9 +251,32 @@ Example:
 https://results.example.com/sitespeed.lobby.BD.typical.cold.true.false/chrome.native.png
 ```
 
-### Local result files
+### Local result files (share one host path)
 
-Each run writes under `{SITESPEED_RESULTS_DIR}/{slug}-{timestamp}/results/` on the **engine host** (bind-mounted into sitespeed). When the worker runs in a container, mount the same absolute path into the worker so it can read JSON/media after the run.
+The worker stages browsertime scripts under `SITESPEED_RESULTS_DIR`, then Podman/Docker bind-mounts that **same absolute path** into sitespeed (`-v $SITESPEED_RESULTS_DIR:/sitespeed.io`). Those paths must be the **engine host** filesystem — not a path that only exists inside the worker container.
+
+When the Temporal worker itself runs in a container (DinD / Podman-in-Podman):
+
+1. Pick a host directory, e.g. `/var/lib/potato-sitespeed-results`
+2. Mount it into the worker at the **identical** path
+3. Set `SITESPEED_RESULTS_DIR` to that path
+
+```bash
+HOST_RESULTS=/var/lib/potato-sitespeed-results
+mkdir -p "$HOST_RESULTS"
+
+podman run --rm -d \
+  --name potato-temporal-sitespeed \
+  -v /run/podman/podman.sock:/run/podman/podman.sock \
+  -v "$HOST_RESULTS:$HOST_RESULTS" \
+  -e SITESPEED_RESULTS_DIR="$HOST_RESULTS" \
+  # … other -e / -v …
+  ghcr.io/kriakiku/potato-temporal-sitespeed:latest
+```
+
+If the worker writes to `/tmp/...` inside its own mount namespace while the engine binds a different host path, sitespeed will fail with missing journey/script files (`bt-measure-journey.js`, etc.).
+
+Each run lands under `{SITESPEED_RESULTS_DIR}/{slug}-{timestamp}/results/` (JSON/HTML/media).
 
 ## Environment
 
@@ -278,7 +301,7 @@ All config is process env (no `.env` file).
 | `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse. Worker installs Potato MITM CA + `ignore-certificate-errors` / `disable-quic` |
 | `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse |
 | `SITESPEED_MAX_ATTEMPTS` | `1` | Temporal activity retries for `runSitespeed` |
-| `SITESPEED_RESULTS_DIR` | `/tmp/potato-sitespeed-results` | Absolute engine-host path for result trees |
+| `SITESPEED_RESULTS_DIR` | `/tmp/potato-sitespeed-results` | Absolute **engine-host** path; when worker is containerized, bind-mount the same path (see Local result files) |
 | `INFLUX_WRITE_URL` | — | HTTP write URL (e.g. `http://vm:8428/write`). Skip emit if unset |
 | `INFLUX_WRITE_USERNAME` / `INFLUX_WRITE_PASSWORD` | — | Optional Basic auth |
 | `INFLUX_WRITE_TOKEN` | — | Optional Bearer token (wins over Basic) |
@@ -325,10 +348,15 @@ ghcr.io/kriakiku/potato-temporal-sitespeed:latest
 ```
 
 ```bash
+# Same host path for worker + engine bind (see “Local result files”)
+HOST_RESULTS=/var/lib/potato-sitespeed-results
+mkdir -p "$HOST_RESULTS"
+
 podman run --rm -d \
   --name potato-temporal-sitespeed \
   -v /run/podman/podman.sock:/run/podman/podman.sock \
-  -v /tmp/potato-sitespeed-results:/tmp/potato-sitespeed-results \
+  -v "$HOST_RESULTS:$HOST_RESULTS" \
+  -e SITESPEED_RESULTS_DIR="$HOST_RESULTS" \
   -e TEMPORAL_ADDRESS=temporal:7233 \
   -e TEMPORAL_TASK_QUEUE=sitespeed \
   -e DEMO_AUTH_IDENTIFIER=… \
@@ -338,7 +366,6 @@ podman run --rm -d \
   -e INFLUX_WRITE_URL=http://victoriametrics:8428/write \
   -e INFLUX_WRITE_USERNAME=writer \
   -e INFLUX_WRITE_PASSWORD=secret \
-  -e SITESPEED_RESULTS_DIR=/tmp/potato-sitespeed-results \
   -e BASE_TLD=example.com \
   -e S3_BUCKET=… -e S3_KEY=… -e S3_SECRET=… \
   ghcr.io/kriakiku/potato-temporal-sitespeed:latest
