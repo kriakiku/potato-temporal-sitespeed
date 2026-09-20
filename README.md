@@ -27,7 +27,7 @@ Activities (visible in Temporal UI):
 7. Tear down Potato (`stopPotato`, non-cancellable cleanup)
 8. `burnPotatoOverlay` → `emitInfluxMetrics` → `uploadSitespeedArtifacts` (non-fatal failures; cancel still propagates)
 
-Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), optional `cpuThrottlingRate`, `cacheMode` cold|warm.
+Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), optional `cpuThrottlingRate`, `cacheMode` cold|warm. Chrome runs with `prefers-color-scheme: dark` (`blink-settings=preferredColorScheme=2`).
 
 ### `potatoRefreshWorkflow`
 

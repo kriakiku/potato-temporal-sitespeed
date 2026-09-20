@@ -124,6 +124,9 @@ export function buildSitespeedBrowserArgs(
     "allow-insecure-localhost",
     "--browsertime.chrome.args",
     "disable-quic",
+    // prefers-color-scheme: dark for page CSS / media queries
+    "--browsertime.chrome.args",
+    "blink-settings=preferredColorScheme=2",
     // WebGPU + WebGL in container (no /dev/dri): SwiftShader Vulkan path.
     // Without enable-unsafe-webgpu, Linux/Xvfb Chrome often returns no adapter.
     "--browsertime.chrome.args",

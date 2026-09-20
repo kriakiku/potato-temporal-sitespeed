@@ -33,6 +33,7 @@ describe("buildSitespeedBrowserArgs", () => {
     expect(args).toContain("enable-unsafe-webgpu");
     expect(args).toContain("use-webgpu-adapter=swiftshader");
     expect(args).toContain("enable-unsafe-swiftshader");
+    expect(args).toContain("blink-settings=preferredColorScheme=2");
   });
 
   test("firstPartyTld adds --firstParty regex; warmup without video skips visualElements", () => {
