@@ -144,10 +144,19 @@ async function main(): Promise<void> {
     fail("journey script must be the last CLI argument");
   }
 
-  const pull = await runEngine(engine, ["pull", sitespeedImage]);
-  if (pull.exitCode !== 0) {
-    console.error(pull.stderr || pull.stdout);
-    fail(`failed to pull ${sitespeedImage}`);
+  const inspect = await runEngine(engine, [
+    "image",
+    "inspect",
+    sitespeedImage,
+  ]);
+  if (inspect.exitCode === 0) {
+    console.log(`Using local image (skip pull): ${sitespeedImage}`);
+  } else {
+    const pull = await runEngine(engine, ["pull", sitespeedImage]);
+    if (pull.exitCode !== 0) {
+      console.error(pull.stderr || pull.stdout);
+      fail(`failed to pull ${sitespeedImage}`);
+    }
   }
 
   const { exitCode, stdout, stderr } = await runEngine(engine, [
