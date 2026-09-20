@@ -79,7 +79,7 @@ export function withInfluxPrecisionNs(url: string): string {
   return u.toString();
 }
 
-function authHeaders(auth: InfluxWriteAuth | undefined): HeadersInit {
+function authHeaders(auth: InfluxWriteAuth | undefined): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "text/plain; charset=utf-8",
   };

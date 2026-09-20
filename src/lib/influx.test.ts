@@ -54,13 +54,13 @@ describe("emitInfluxWrite", () => {
     let seenUrl = "";
     let seenAuth = "";
     let seenBody = "";
-    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = mock(async (input: string | URL, init?: RequestInit) => {
       seenUrl = String(input);
       const headers = new Headers(init?.headers);
       seenAuth = headers.get("Authorization") ?? "";
       seenBody = String(init?.body ?? "");
       return new Response(null, { status: 204 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const result = await emitInfluxWrite(
       "http://vm:8428/write",
@@ -83,11 +83,11 @@ describe("emitInfluxWrite", () => {
 
   test("uses Basic auth when no token", async () => {
     let seenAuth = "";
-    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = mock(async (_input: string | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       seenAuth = headers.get("Authorization") ?? "";
       return new Response(null, { status: 204 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await emitInfluxWrite(
       "http://vm:8428/write",
@@ -101,7 +101,7 @@ describe("emitInfluxWrite", () => {
   });
 
   test("throws on non-2xx", async () => {
-    globalThis.fetch = mock(async () => new Response("nope", { status: 401 })) as typeof fetch;
+    globalThis.fetch = mock(async () => new Response("nope", { status: 401 })) as unknown as typeof fetch;
 
     await expect(
       emitInfluxWrite("http://vm:8428/write", [
