@@ -48,7 +48,20 @@ export type SitespeedBrowserArgsInput = {
    * Force cache clear. Default: true for cold, false for warm.
    */
   clearCache?: boolean;
+  /**
+   * Apex domain for --firstParty regex (e.g. example.com).
+   * Enables pagexray firstParty/thirdParty cookie + request splits across subdomains.
+   */
+  firstPartyTld?: string;
 };
+
+/** Build sitespeed --firstParty regex for an apex TLD (matches host and subdomains). */
+export function firstPartyRegexForTld(tld: string): string | undefined {
+  const apex = tld.trim().toLowerCase().replace(/^\.+|\.+$/g, "");
+  if (!apex || !/^[a-z0-9.-]+$/i.test(apex)) return undefined;
+  const escaped = apex.replace(/\./g, "\\.");
+  return `.*\\.${escaped}`;
+}
 
 /**
  * Shared sitespeed CLI flags for production activity and local e2e.
@@ -81,9 +94,18 @@ export function buildSitespeedBrowserArgs(
       "--video",
       "--browsertime.videoParams.addTimer",
       "true",
+      // Hero visual timings: largest H1 + largest image in viewport
+      "--visualElements",
     );
   } else {
     cmd.push("--video", "false");
+  }
+
+  const firstParty = input.firstPartyTld
+    ? firstPartyRegexForTld(input.firstPartyTld)
+    : undefined;
+  if (firstParty) {
+    cmd.push("--firstParty", firstParty);
   }
 
   cmd.push(

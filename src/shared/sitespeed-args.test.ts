@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildSitespeedBrowserArgs,
   CONTAINER_CHROME_PROFILE,
+  firstPartyRegexForTld,
   SITESPEED_ITERATIONS,
 } from "../shared/sitespeed-args";
 
@@ -28,6 +29,34 @@ describe("buildSitespeedBrowserArgs", () => {
     expect(args.at(-1)).toBe("https://example.com/");
     expect(args).toContain("--browsertime.cacheClearRaw=true");
     expect(args).not.toContain("--browsertime.cacheClearRaw");
+    expect(args).toContain("--visualElements");
+  });
+
+  test("firstPartyTld adds --firstParty regex; warmup without video skips visualElements", () => {
+    expect(firstPartyRegexForTld("example.com")).toBe(".*\\.example\\.com");
+    const withFp = buildSitespeedBrowserArgs({
+      browser: "chrome",
+      slug: "test",
+      metricPrefix: "lobby",
+      cacheMode: "cold",
+      url: "https://www.example.com/",
+      firstPartyTld: "example.com",
+    });
+    const i = withFp.indexOf("--firstParty");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(withFp[i + 1]).toBe(".*\\.example\\.com");
+
+    const noVideo = buildSitespeedBrowserArgs({
+      browser: "chrome",
+      slug: "test",
+      metricPrefix: "lobby",
+      cacheMode: "warm",
+      url: "https://example.com/",
+      video: false,
+      firstPartyTld: "example.com",
+    });
+    expect(noVideo).not.toContain("--visualElements");
+    expect(noVideo).toContain("--firstParty");
   });
 
   test("multi journey cold uses cacheClearRaw=true so path is not swallowed", () => {

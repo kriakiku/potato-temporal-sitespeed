@@ -498,6 +498,7 @@ export async function runSitespeed(
       chromeUserDataDir: opts.chromeUserDataDir,
       video: opts.video,
       clearCache: opts.clearCache,
+      firstPartyTld: input.tld,
     });
 
     const containerName = `sitespeed-${slug}-${opts.phase}-${Date.now()}`;

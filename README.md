@@ -248,7 +248,7 @@ The worker downloads [sitespeedio/url2green](https://github.com/sitespeedio/url2
 
 ### Video overlay
 
-Browsertime’s built-in timer stays **on** for `{browser}.native.mp4` (`--browsertime.videoParams.addTimer true`).
+Browsertime’s built-in timer stays **on** for `{browser}.native.mp4` (`--browsertime.videoParams.addTimer true`). Measure runs also pass `--visualElements` (largest H1 + largest image hero timings) and `--firstParty` from the workflow apex TLD (pagexray first/third-party cookie splits).
 
 After measure, the worker burns a custom ASS overlay (nav / iframe / sliding WS+API markers) via ffmpeg in the sitespeed image and uploads it separately as `{browser}.potato.mp4`. The native mp4 is left unchanged. Overlay burn failure is non-fatal (native still uploads; `potato_overlay.burned` stays false).
 
