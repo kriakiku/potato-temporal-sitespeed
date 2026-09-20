@@ -400,10 +400,11 @@ export async function runSitespeed(
       "utf8",
     );
   } catch (err) {
-    log.warn("Failed to stage browsertime scripts", {
-      err: err instanceof Error ? err.message : String(err),
-      src: HOST_FIRST_IFRAME_SCRIPT,
-    });
+    throw new Error(
+      `Failed to stage browsertime scripts into ${resultDir}: ${
+        err instanceof Error ? err.message : String(err)
+      } (src=${HOST_FIRST_IFRAME_SCRIPT})`,
+    );
   }
 
   const runSitespeedContainer = async (opts: {

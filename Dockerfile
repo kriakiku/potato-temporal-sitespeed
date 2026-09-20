@@ -10,6 +10,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json bun.lock tsconfig.json ./
 COPY src ./src
+COPY scripts ./scripts
 
 ENV NODE_ENV=production
 
