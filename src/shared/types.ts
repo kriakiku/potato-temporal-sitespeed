@@ -24,6 +24,16 @@ export type SiteSpeedTestInput = {
    * Unset → no CPU throttling (network shaping via Potato only).
    */
   cpuThrottlingRate?: number;
+  /**
+   * Optional demo manager profile locale override (e.g. "EN").
+   * Unset → keep value from GET /api/v2/profile.
+   */
+  locale?: string;
+  /**
+   * Optional demo manager current currency (e.g. "EUR").
+   * Unset → keep balance.current flags from profile.
+   */
+  currency?: string;
 };
 
 export type NormalizedSiteSpeedTestInput = {
@@ -37,6 +47,8 @@ export type NormalizedSiteSpeedTestInput = {
   cacheMode: CacheMode;
   /** Present only when set on input (≥ 1). */
   cpuThrottlingRate?: number;
+  locale?: string;
+  currency?: string;
 };
 
 export type SiteSpeedTestResult = {
@@ -60,8 +72,12 @@ export type PotatoRefreshResult = {
   potatoContainer: string;
   catalogOk: boolean;
   baselineProbedAt?: string;
-  /** Images pulled at the start of refresh (POTATO_IMAGE, SITESPEED_IMAGE). */
-  pulledImages: string[];
+  /** Summary of disk reclaim during refresh (no image pulls). */
+  prune: {
+    removedContainers: number;
+    removedVolumes: number;
+    removedResultDirs: number;
+  };
 };
 
 /**
@@ -89,3 +105,18 @@ export type SitespeedRunHandle = {
   /** Chrome CPUThrottlingRate when set (integer ≥ 1). */
   cpuThrottlingRate?: number;
 };
+
+export type AutostartTickResult =
+  | {
+      status: "skipped";
+      reason: "busy" | "no_jobs" | "missing_jobs_file";
+      busyWorkflowIds?: string[];
+    }
+  | {
+      status: "started";
+      workflowId: string;
+      jobIndex: number;
+      nextIndex: number;
+      refreshed: boolean;
+      metricPrefix: string;
+    };

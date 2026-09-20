@@ -93,8 +93,6 @@ export type WorkerEnv = {
    * Run @sitespeed.io/plugin-lighthouse (plus1 image). Default true.
    */
   sitespeedLighthouse: boolean;
-  /** Max activity attempts for measureSitespeed / warmupSitespeedCache (default 1). */
-  sitespeedMaxAttempts: number;
   /**
    * Absolute path on the engine host for per-run sitespeed result trees.
    * Must be visible to the worker process (bind-mount the same path when the
@@ -125,6 +123,12 @@ export type WorkerEnv = {
    * inside potato netns (shape exclude) and worker can reach host listeners.
    */
   hostGateway?: string;
+  /** Absolute path to potato config.json (`{ "autostart": [...] }`). */
+  configPath: string;
+  /** Absolute path to autostart round-robin state `{ nextIndex }`. */
+  autostartStatePath: string;
+  /** Temporal Schedule interval string for helper CLI (e.g. `5m`). */
+  autostartScheduleInterval: string;
 };
 
 /** Strip scheme/trailing slash and lowercase for host comparison. */
@@ -144,6 +148,11 @@ export function getEnv(): WorkerEnv {
   const namespaceBase =
     optional("ARTIFACT_NAMESPACE_BASE") ??
     optional("GRAPHITE_NAMESPACE_BASE", "sitespeed")!;
+
+  const resultsDir = optional(
+    "SITESPEED_RESULTS_DIR",
+    "/tmp/potato-sitespeed-results",
+  )!;
 
   cached = {
     temporalAddress: optional("TEMPORAL_ADDRESS", "localhost:7233")!,
@@ -167,7 +176,6 @@ export function getEnv(): WorkerEnv {
       "SITESPEED_IMAGE",
       "sitespeedio/sitespeed.io:40.0.0-plus1",
     )!,
-    sitespeedMaxAttempts: optionalInt("SITESPEED_MAX_ATTEMPTS", 1),
     demoAuthIdentifier: optional("DEMO_AUTH_IDENTIFIER"),
     demoAuthPassword: optional("DEMO_AUTH_PASSWORD"),
     demoAuthAuthenticator: optional("DEMO_AUTH_AUTHENTICATOR"),
@@ -182,10 +190,7 @@ export function getEnv(): WorkerEnv {
       Boolean(optional("S3_ENDPOINT")),
     ),
     sitespeedLighthouse: optionalBool("SITESPEED_LIGHTHOUSE", true),
-    sitespeedResultsDir: optional(
-      "SITESPEED_RESULTS_DIR",
-      "/tmp/potato-sitespeed-results",
-    )!,
+    sitespeedResultsDir: resultsDir,
     influxWriteUrl: optional("INFLUX_WRITE_URL"),
     influxWriteUsername: optional("INFLUX_WRITE_USERNAME"),
     influxWritePassword: optional("INFLUX_WRITE_PASSWORD"),
@@ -197,6 +202,15 @@ export function getEnv(): WorkerEnv {
       return raw ? normalizeHost(raw) : undefined;
     })(),
     hostGateway: optional("HOST_GATEWAY"),
+    configPath: optional(
+      "CONFIG_PATH",
+      `${resultsDir}/config.json`,
+    )!,
+    autostartStatePath: optional(
+      "AUTOSTART_STATE_PATH",
+      `${resultsDir}/autostart-state.json`,
+    )!,
+    autostartScheduleInterval: optional("AUTOSTART_SCHEDULE_INTERVAL", "5m")!,
   };
 
   return cached;
@@ -213,6 +227,16 @@ export function assertExportConfig(env: WorkerEnv): void {
   if (!env.sitespeedResultsDir.startsWith("/")) {
     throw new Error(
       `SITESPEED_RESULTS_DIR must be an absolute path on the engine host (got: ${env.sitespeedResultsDir})`,
+    );
+  }
+  if (!env.configPath.startsWith("/")) {
+    throw new Error(
+      `CONFIG_PATH must be an absolute path (got: ${env.configPath})`,
+    );
+  }
+  if (!env.autostartStatePath.startsWith("/")) {
+    throw new Error(
+      `AUTOSTART_STATE_PATH must be an absolute path (got: ${env.autostartStatePath})`,
     );
   }
 }

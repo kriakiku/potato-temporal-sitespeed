@@ -1,4 +1,8 @@
 import { log } from "@temporalio/activity";
+import {
+  buildManagersProfilePatch,
+  type DemoProfile,
+} from "../lib/demo-profile";
 import { optional, required } from "../lib/env";
 import { generateTotpCode } from "../lib/totp";
 
@@ -7,6 +11,12 @@ export type ResolveEntryUrlInput = {
   tableId?: string;
   /** When tableId is set: open game frame without lobby via enter-table */
   direct: boolean;
+  /** PotatoNetwork emulation country — written to demo manager profile. */
+  country: string;
+  /** Optional locale override for manager profile (e.g. EN). */
+  locale?: string;
+  /** Optional current currency override (e.g. EUR). */
+  currency?: string;
 };
 
 export type ResolveEntryUrlResult = {
@@ -49,20 +59,10 @@ function normalizeTld(tld: string): string {
   return tld.replace(/^https?:\/\//, "").replace(/\/$/, "");
 }
 
-async function postJson<T>(
+async function parseJsonResponse(
   url: string,
-  body: unknown,
-  headers: Record<string, string> = {},
-): Promise<T> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json;charset=UTF-8",
-      ...headers,
-    },
-    body: JSON.stringify(body),
-  });
-
+  res: Response,
+): Promise<unknown> {
   const text = await res.text();
   let json: unknown;
   try {
@@ -72,14 +72,60 @@ async function postJson<T>(
       `${url} returned non-JSON (${res.status}): ${text.slice(0, 500)}`,
     );
   }
-
   if (!res.ok) {
     throw new Error(
       `${url} failed (${res.status}): ${text.slice(0, 800)}`,
     );
   }
+  return json;
+}
 
-  return json as T;
+async function postJson<T>(
+  url: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json;charset=UTF-8",
+      accept: "application/json, text/plain, */*",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+  return (await parseJsonResponse(url, res)) as T;
+}
+
+async function getJson<T>(
+  url: string,
+  headers: Record<string, string> = {},
+): Promise<T> {
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      accept: "application/json, text/plain, */*",
+      ...headers,
+    },
+  });
+  return (await parseJsonResponse(url, res)) as T;
+}
+
+async function patchJson<T>(
+  url: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<T> {
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      "content-type": "application/json;charset=UTF-8",
+      accept: "application/json, text/plain, */*",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+  return (await parseJsonResponse(url, res)) as T;
 }
 
 async function fetchDemoAccessToken(tld: string): Promise<string> {
@@ -104,9 +150,88 @@ async function fetchDemoAccessToken(tld: string): Promise<string> {
   return accessToken;
 }
 
+function bearer(accessToken: string): Record<string, string> {
+  return { authorization: `Bearer ${accessToken}` };
+}
+
 /**
- * Authenticate against demo.{tld}, start a master session, and optionally
- * enter a table directly. Returns the frameUrl sitespeed should open.
+ * Sync demo manager profile country (and optional locale/currency) to match
+ * the PotatoNetwork emulation before opening a master session.
+ */
+async function syncManagersProfile(opts: {
+  tld: string;
+  accessToken: string;
+  country: string;
+  locale?: string;
+  currency?: string;
+}): Promise<void> {
+  const profile = await getJson<DemoProfile>(
+    `https://demo.${opts.tld}/api/v2/profile`,
+    bearer(opts.accessToken),
+  );
+
+  if (
+    opts.currency &&
+    !(profile.gameSettings?.balance ?? []).some(
+      (b) =>
+        (b.currency ?? "").toUpperCase() === opts.currency!.trim().toUpperCase(),
+    )
+  ) {
+    log.warn("Requested currency not in profile balance; leaving currents", {
+      currency: opts.currency,
+    });
+  }
+
+  const patch = buildManagersProfilePatch({
+    profile,
+    country: opts.country,
+    locale: opts.locale,
+    currency: opts.currency,
+  });
+
+  await patchJson(
+    `https://demo.${opts.tld}/api/v3/managers/profile`,
+    patch,
+    bearer(opts.accessToken),
+  );
+  log.info("Synced demo managers profile", {
+    country: patch.country,
+    locale: patch.locale,
+    currency: patch.gameSettings.balance.find((b) => b.current)?.currency,
+  });
+}
+
+/**
+ * Start a plain lobby master session, read msid/mid, bulk-delete it.
+ * Ensures any prior/current session is cleared before we create the real one.
+ */
+async function discardLobbyMasterSession(opts: {
+  tld: string;
+  accessToken: string;
+}): Promise<void> {
+  const startUrl = `https://demo.${opts.tld}/api/go/v1/master-sessions/start`;
+  const session = await postJson<MasterSessionResponse>(
+    startUrl,
+    { extend: true },
+    bearer(opts.accessToken),
+  );
+  const msid = session.msid?.trim();
+  if (!msid) {
+    log.warn("Lobby master-sessions/start returned no msid; skip pre-delete");
+    return;
+  }
+
+  await postJson(
+    `https://demo.${opts.tld}/api/go/v1/master-sessions/bulk-delete`,
+    { masterSessionIds: [msid] },
+    bearer(opts.accessToken),
+  );
+  log.info("Deleted lobby master session before create", { msid });
+}
+
+/**
+ * Authenticate against demo.{tld}, sync manager profile to emulation country,
+ * discard the current lobby master session, start a fresh one, optionally enter-table.
  *
  * Modes:
  * - no tableId → lobby frameUrl from master-sessions/start
@@ -122,6 +247,16 @@ export async function resolveEntryUrl(
   const tld = normalizeTld(input.tld);
   const accessToken = await fetchDemoAccessToken(tld);
 
+  await syncManagersProfile({
+    tld,
+    accessToken,
+    country: input.country,
+    locale: input.locale,
+    currency: input.currency,
+  });
+
+  await discardLobbyMasterSession({ tld, accessToken });
+
   const startBody: { extend: true; tableId?: string } = { extend: true };
   if (input.tableId) {
     startBody.tableId = input.tableId;
@@ -130,10 +265,10 @@ export async function resolveEntryUrl(
   const session = await postJson<MasterSessionResponse>(
     `https://demo.${tld}/api/go/v1/master-sessions/start`,
     startBody,
-    { authorization: `Bearer ${accessToken}` },
+    bearer(accessToken),
   );
 
-  const msid = session.msid;
+  const msid = session.msid?.trim();
   if (!msid) {
     throw new Error("master-sessions/start response missing msid");
   }
@@ -180,7 +315,7 @@ export async function deleteMasterSession(
     await postJson(
       `https://demo.${tld}/api/go/v1/master-sessions/bulk-delete`,
       { masterSessionIds: [msid] },
-      { authorization: `Bearer ${accessToken}` },
+      bearer(accessToken),
     );
     log.info("Deleted demo master session", { tld, msid });
   } catch (err) {

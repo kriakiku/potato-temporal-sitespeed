@@ -34,6 +34,40 @@ describe("buildSitespeedBrowserArgs", () => {
     expect(args).toContain("use-webgpu-adapter=swiftshader");
     expect(args).toContain("enable-unsafe-swiftshader");
     expect(args).toContain("blink-settings=preferredColorScheme=0");
+    expect(args).not.toContain("--cpu");
+    expect(args).not.toContain("--axe.enable");
+  });
+
+  test("enableCpu / enableAxe are opt-in", () => {
+    const args = buildSitespeedBrowserArgs({
+      browser: "chrome",
+      slug: "test",
+      metricPrefix: "lobby",
+      cacheMode: "cold",
+      url: "https://example.com/",
+      enableCpu: true,
+      enableAxe: true,
+    });
+    expect(args).toContain("--cpu");
+    expect(args).toContain("--axe.enable");
+  });
+
+  test("slim timeouts override defaults", () => {
+    const args = buildSitespeedBrowserArgs({
+      browser: "chrome",
+      slug: "warmup",
+      metricPrefix: "lobby",
+      cacheMode: "warm",
+      url: "https://example.com/",
+      video: false,
+      pageCompleteCheckMs: 60_000,
+      pageLoadMs: 90_000,
+      elementWaitMs: 30_000,
+    });
+    const pc = args.indexOf("--browsertime.timeouts.pageCompleteCheck");
+    expect(args[pc + 1]).toBe("60000");
+    const pl = args.indexOf("--browsertime.timeouts.pageLoad");
+    expect(args[pl + 1]).toBe("90000");
   });
 
   test("firstPartyTld adds --firstParty regex; warmup without video skips visualElements", () => {

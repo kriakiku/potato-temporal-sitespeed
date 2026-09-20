@@ -13,6 +13,11 @@ export type StartPotatoInput = {
   namePrefix?: string;
 };
 
+export type EnsurePotatoInput = {
+  country: string;
+  tier?: PotatoTier;
+};
+
 export type PotatoHandle = {
   containerName: string;
   apiBaseUrl: string;
@@ -21,9 +26,22 @@ export type PotatoHandle = {
 /** PotatoNetwork path-delay script inside the container (hot-reloaded on mtime). */
 export const POTATO_RULES_EXPR_CONTAINER_PATH = "/data/rules.expr";
 
+/** Long-lived per-location sidecars share this prefix (also matches ephemeral leftovers). */
+export const POTATO_CONTAINER_PREFIX = "potato-";
+
 function containerNameFor(runId: string, prefix = "potato"): string {
   const safe = runId.replace(/[^a-zA-Z0-9_.-]/g, "").slice(0, 48);
   return `${prefix}-${safe || Date.now()}`;
+}
+
+/** Stable name for a country/tier profile container, e.g. potato-BD-typical. */
+export function stablePotatoContainerName(
+  country: string,
+  tier: PotatoTier = "typical",
+): string {
+  const c = country.replace(/[^a-zA-Z0-9]/g, "").toUpperCase() || "XX";
+  const t = tier.replace(/[^a-zA-Z0-9]/g, "") || "typical";
+  return `${POTATO_CONTAINER_PREFIX}${c}-${t}`;
 }
 
 function potatoBinds(dataVolume: string, rulesExprHostPath?: string): string[] {
@@ -111,10 +129,11 @@ async function apiFetch<T>(
   return json as T;
 }
 
-export async function startPotato(input: StartPotatoInput): Promise<PotatoHandle> {
+async function buildPotatoContainerEnv(input: {
+  country?: string;
+  tier?: PotatoTier;
+}): Promise<Record<string, string>> {
   const env = getEnv();
-  const containerName = containerNameFor(input.runId, input.namePrefix ?? "potato");
-
   const containerEnv: Record<string, string> = {
     POTATONETWORK_CATALOG_CRON: "false",
     POTATONETWORK_BASELINE_CRON: "false",
@@ -136,21 +155,90 @@ export async function startPotato(input: StartPotatoInput): Promise<PotatoHandle
     assertPotatoRulesExpr(env.potatoRulesExpr);
   }
 
-  await podman.runDetached({
-    name: containerName,
-    image: env.potatoImage,
-    capAdd: ["NET_ADMIN"],
-    binds: potatoBinds(env.potatoDataVolume, env.potatoRulesExpr),
-    publish: [{ containerPort: 7783, hostIp: "127.0.0.1" }],
-    env: containerEnv,
-  });
+  return containerEnv;
+}
 
+async function handleFromRunningContainer(
+  containerName: string,
+): Promise<PotatoHandle> {
   const binding = await waitForPort(containerName, 7783);
   const host = binding.host === "0.0.0.0" ? "127.0.0.1" : binding.host;
   return {
     containerName,
     apiBaseUrl: `http://${host}:${binding.port}`,
   };
+}
+
+async function createPotatoContainer(opts: {
+  containerName: string;
+  country?: string;
+  tier?: PotatoTier;
+  forceReplace: boolean;
+}): Promise<PotatoHandle> {
+  const env = getEnv();
+  const containerEnv = await buildPotatoContainerEnv({
+    country: opts.country,
+    tier: opts.tier,
+  });
+
+  await podman.runDetached({
+    name: opts.containerName,
+    image: env.potatoImage,
+    capAdd: ["NET_ADMIN"],
+    binds: potatoBinds(env.potatoDataVolume, env.potatoRulesExpr),
+    publish: [{ containerPort: 7783, hostIp: "127.0.0.1" }],
+    env: containerEnv,
+    forceReplace: opts.forceReplace,
+  });
+
+  return handleFromRunningContainer(opts.containerName);
+}
+
+/** Ephemeral Potato (refresh / legacy). Always force-replaces the name. */
+export async function startPotato(input: StartPotatoInput): Promise<PotatoHandle> {
+  const containerName = containerNameFor(
+    input.runId,
+    input.namePrefix ?? "potato",
+  );
+  return createPotatoContainer({
+    containerName,
+    country: input.country,
+    tier: input.tier,
+    forceReplace: true,
+  });
+}
+
+/**
+ * Long-lived per-country Potato: reuse if healthy, otherwise create.
+ * Does not tear down on success — callers must not stopPotato after measure.
+ */
+export async function ensurePotato(
+  input: EnsurePotatoInput,
+): Promise<PotatoHandle> {
+  const tier = input.tier ?? "typical";
+  const containerName = stablePotatoContainerName(input.country, tier);
+
+  if (await podman.isContainerRunning(containerName)) {
+    const handle = await handleFromRunningContainer(containerName);
+    try {
+      await waitPotatoHealthy(handle, 15_000);
+      return handle;
+    } catch {
+      // Unhealthy — recreate below.
+      await podman.stopContainer(containerName).catch(() => undefined);
+      await podman.removeContainer(containerName, true).catch(() => undefined);
+    }
+  } else {
+    // Stopped / missing — clear any leftover name before create.
+    await podman.removeContainer(containerName, true).catch(() => undefined);
+  }
+
+  return createPotatoContainer({
+    containerName,
+    country: input.country,
+    tier,
+    forceReplace: true,
+  });
 }
 
 async function waitForPort(
@@ -210,6 +298,21 @@ async function fetchCaReady(
 export async function stopPotato(handle: PotatoHandle): Promise<void> {
   await podman.stopContainer(handle.containerName);
   await podman.removeContainer(handle.containerName, true);
+}
+
+/**
+ * Stop+rm every PotatoNetwork sidecar (long-lived country + ephemeral leftovers).
+ * Used by potatoRefreshWorkflow to avoid memory leaks before catalog refresh.
+ */
+export async function stopAllPotatoContainers(): Promise<{ stopped: string[] }> {
+  const names = await podman.listContainerNamesByPrefix(POTATO_CONTAINER_PREFIX);
+  const stopped: string[] = [];
+  for (const name of names) {
+    await podman.stopContainer(name).catch(() => undefined);
+    await podman.removeContainer(name, true).catch(() => undefined);
+    stopped.push(name);
+  }
+  return { stopped };
 }
 
 export async function refreshPotatoCatalog(

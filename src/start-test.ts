@@ -21,7 +21,7 @@ async function main(): Promise<void> {
   const tld = arg("tld");
   if (!metricPrefix || !country || !tld) {
     console.error(
-      "Usage: bun run src/start-test.ts --metricPrefix lobby --country BD --tld example.com [--tableId ID] [--direct] [--tier typical] [--cacheMode cold|warm] [--cpuThrottlingRate 4]",
+      "Usage: bun run src/start-test.ts --metricPrefix lobby --country BD --tld example.com [--tableId ID] [--direct] [--tier typical] [--cacheMode cold|warm] [--cpuThrottlingRate 4] [--locale EN] [--currency EUR]",
     );
     process.exit(1);
   }
@@ -37,6 +37,8 @@ async function main(): Promise<void> {
     browser: arg("browser"),
     cacheMode: (arg("cacheMode") as SiteSpeedTestInput["cacheMode"]) ?? undefined,
     cpuThrottlingRate: cpuRateRaw !== undefined ? Number(cpuRateRaw) : undefined,
+    locale: arg("locale"),
+    currency: arg("currency"),
   };
 
   const connection = await Connection.connect(

@@ -10,8 +10,11 @@ export const CHROME_DEVICE_NAME = "Samsung Galaxy A51/71";
 /** Example mid-range phone slowdown (document in README; rate comes from workflow input). */
 export const CPU_THROTTLING_RATE_EXAMPLE = 4;
 
-/** Always a single browsertime iteration (`-n 1`). */
+/** Always a single browsertime iteration (`-n 1`). Multi-run = separate containers. */
 export const SITESPEED_ITERATIONS = 1;
+
+/** Default number of separate measure browser launches (aggregated outside sitespeed). */
+export const MEASURE_RUNS = 3;
 
 /** Container path for persistent Chrome profile (host dir bind-mounted under /sitespeed.io). */
 export const CONTAINER_CHROME_PROFILE = "/sitespeed.io/chrome-profile";
@@ -53,6 +56,16 @@ export type SitespeedBrowserArgsInput = {
    * Enables pagexray firstParty/thirdParty cookie + request splits across subdomains.
    */
   firstPartyTld?: string;
+  /** Chrome timeline / long tasks (`--cpu`). Default false. */
+  enableCpu?: boolean;
+  /** axe accessibility plugin. Default false. */
+  enableAxe?: boolean;
+  /** Override browsertime.timeouts.pageCompleteCheck (ms). */
+  pageCompleteCheckMs?: number;
+  /** Override browsertime.timeouts.pageLoad (ms). */
+  pageLoadMs?: number;
+  /** Override browsertime.timeouts.elementWait (ms). */
+  elementWaitMs?: number;
 };
 
 /** Build sitespeed --firstParty regex for an apex TLD (matches host and subdomains). */
@@ -66,7 +79,7 @@ export function firstPartyRegexForTld(tld: string): string | undefined {
 /**
  * Shared sitespeed CLI flags for production activity and local e2e.
  * Writes local JSON/HTML/media; no Graphite/S3 — callers own export.
- * Always `-n 1`.
+ * Always `-n 1` (multi-run aggregation is done in Temporal activities).
  */
 export function buildSitespeedBrowserArgs(
   input: SitespeedBrowserArgsInput,
@@ -75,6 +88,9 @@ export function buildSitespeedBrowserArgs(
   const video = input.video !== false;
   const clearCache =
     input.clearCache ?? input.cacheMode !== "warm";
+  const pageCompleteCheckMs = input.pageCompleteCheckMs ?? 180_000;
+  const pageLoadMs = input.pageLoadMs ?? 300_000;
+  const elementWaitMs = input.elementWaitMs ?? 60_000;
 
   const cmd: string[] = [
     "-b",
@@ -144,16 +160,20 @@ export function buildSitespeedBrowserArgs(
     // Opt-in SwiftShader for WebGL (Chromium no longer falls back silently)
     "--browsertime.chrome.args",
     "enable-unsafe-swiftshader",
-    // Chrome timeline + long tasks; axe plugin (sustainable/Green Web disabled)
-    "--cpu",
-    "--axe.enable",
     "--browsertime.timeouts.pageCompleteCheck",
-    "180000",
+    String(pageCompleteCheckMs),
     "--browsertime.timeouts.pageLoad",
-    "300000",
+    String(pageLoadMs),
     "--browsertime.timeouts.elementWait",
-    "60000",
+    String(elementWaitMs),
   );
+
+  if (input.enableCpu) {
+    cmd.push("--cpu");
+  }
+  if (input.enableAxe) {
+    cmd.push("--axe.enable");
+  }
 
   // --urlAlias must match getURLs() count. Journey/multi scripts yield 0 HTTP
   // URLs there, so CLI alias mismatches; measure.start(alias) sets the name.

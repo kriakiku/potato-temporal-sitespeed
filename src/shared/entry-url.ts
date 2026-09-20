@@ -53,6 +53,9 @@ export function normalizeSiteSpeedInput(
     cpuThrottlingRate = rate;
   }
 
+  const locale = input.locale?.trim() || undefined;
+  const currency = input.currency?.trim().toUpperCase() || undefined;
+
   return {
     metricPrefix,
     country,
@@ -63,5 +66,7 @@ export function normalizeSiteSpeedInput(
     browser: input.browser?.trim() || DEFAULT_BROWSER,
     cacheMode,
     cpuThrottlingRate,
+    locale,
+    currency,
   };
 }

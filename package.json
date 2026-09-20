@@ -8,6 +8,7 @@
     "start": "bun run src/worker.ts",
     "start-test": "bun run src/start-test.ts",
     "start-refresh": "bun run src/start-refresh.ts",
+    "start-autostart-schedule": "bun run src/start-autostart-schedule.ts",
     "e2e:screenshot": "bun run scripts/e2e-screenshot.ts",
     "e2e:sitespeed-cli": "bun run scripts/e2e-sitespeed-cli.ts",
     "e2e:overlay": "bun run scripts/e2e-overlay.ts",

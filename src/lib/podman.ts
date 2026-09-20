@@ -273,10 +273,127 @@ export const podman = {
     }
   },
 
+  /** True when a container with this name exists and is running. */
+  async isContainerRunning(nameOrId: string): Promise<boolean> {
+    try {
+      const info = await (await engine()).getContainer(nameOrId).inspect();
+      return info.State?.Running === true;
+    } catch {
+      return false;
+    }
+  },
+
+  /** Container names (no leading slash) that start with `prefix`. */
+  async listContainerNamesByPrefix(prefix: string): Promise<string[]> {
+    try {
+      const list = await (await engine()).listContainers({ all: true });
+      const out: string[] = [];
+      for (const c of list) {
+        for (const raw of c.Names ?? []) {
+          const name = raw.replace(/^\//, "");
+          if (name.startsWith(prefix)) out.push(name);
+        }
+      }
+      return [...new Set(out)];
+    } catch (err) {
+      throw new PodmanError(
+        `list containers by prefix failed: ${prefix}`,
+        err,
+      );
+    }
+  },
+
+  /**
+   * Reclaim disk: remove prefixed leftovers, then prune stopped containers,
+   * unused networks, unused volumes (except `keepVolumes`), dangling images,
+   * and build cache. Does **not** pull images.
+   */
+  async pruneStaleResources(opts: {
+    containerNamePrefixes: string[];
+    keepVolumes: string[];
+  }): Promise<{
+    removedContainers: string[];
+    prunedContainers: unknown;
+    prunedNetworks: unknown;
+    removedVolumes: string[];
+    prunedImages: unknown;
+    prunedBuilder: unknown;
+  }> {
+    const d = await engine();
+    const keep = new Set(opts.keepVolumes.filter(Boolean));
+    const removedContainers: string[] = [];
+
+    for (const prefix of opts.containerNamePrefixes) {
+      const names = await this.listContainerNamesByPrefix(prefix);
+      for (const name of names) {
+        await this.stopContainer(name).catch(() => undefined);
+        await this.removeContainer(name, true).catch(() => undefined);
+        removedContainers.push(name);
+      }
+    }
+
+    let prunedContainers: unknown;
+    let prunedNetworks: unknown;
+    let prunedImages: unknown;
+    let prunedBuilder: unknown;
+    try {
+      prunedContainers = await d.pruneContainers({});
+    } catch (err) {
+      throw new PodmanError("prune containers failed", err);
+    }
+    try {
+      prunedNetworks = await d.pruneNetworks({});
+    } catch (err) {
+      throw new PodmanError("prune networks failed", err);
+    }
+
+    const removedVolumes: string[] = [];
+    try {
+      const listed = await d.listVolumes();
+      const volumes = (listed.Volumes ?? []) as Array<{ Name?: string }>;
+      for (const v of volumes) {
+        const name = v.Name?.trim();
+        if (!name || keep.has(name)) continue;
+        try {
+          await d.getVolume(name).remove({ force: true });
+          removedVolumes.push(name);
+        } catch {
+          // in use or protected — skip
+        }
+      }
+    } catch (err) {
+      throw new PodmanError("list/remove volumes failed", err);
+    }
+
+    try {
+      // Default dangling=true: only unused untagged layers (keep Potato/sitespeed tags).
+      prunedImages = await d.pruneImages({});
+    } catch (err) {
+      throw new PodmanError("prune images failed", err);
+    }
+    try {
+      prunedBuilder = await d.pruneBuilder({});
+    } catch {
+      // Podman may not support build prune — non-fatal
+      prunedBuilder = { skipped: true };
+    }
+
+    return {
+      removedContainers,
+      prunedContainers,
+      prunedNetworks,
+      removedVolumes,
+      prunedImages,
+      prunedBuilder,
+    };
+  },
+
   async runDetached(
-    opts: RunContainerOptions,
+    opts: RunContainerOptions & { /** Default true — remove existing name first. */ forceReplace?: boolean },
   ): Promise<{ id: string; name: string }> {
-    await this.removeContainer(opts.name, true);
+    if (opts.forceReplace !== false) {
+      await this.removeContainer(opts.name, true);
+    }
     await pullImage(opts.image);
     try {
       const d = await engine();

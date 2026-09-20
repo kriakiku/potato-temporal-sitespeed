@@ -1,104 +1,139 @@
 import {
   CancellationScope,
+  executeChild,
   isCancellation,
   log,
   proxyActivities,
   workflowInfo,
 } from "@temporalio/workflow";
 import type * as activities from "../activities/index";
+import { MEASURE_RUNS } from "../shared/sitespeed-args";
 import { normalizeSiteSpeedInput } from "../shared/entry-url";
-import { sitespeedActivityMaxAttempts } from "../shared/sitespeed-attempts";
 import type {
+  AutostartTickResult,
   PotatoRefreshResult,
   SiteSpeedTestInput,
   SiteSpeedTestResult,
   SitespeedRunHandle,
 } from "../shared/types";
 
-const {
-  ensurePotatoVolume,
-  startPotato,
-  waitPotatoHealthy,
-  stopPotato,
-  refreshPotatoCatalog,
-  refreshPotatoBaseline,
-  resolveEntryUrl,
-  deleteMasterSession,
-  pullUsedImages,
-  resetPotatoStats,
-} = proxyActivities<typeof activities>({
+const { resolveEntryUrl, deleteMasterSession } = proxyActivities<
+  typeof activities
+>({
   startToCloseTimeout: "30 minutes",
   heartbeatTimeout: "2 minutes",
   retry: {
-    maximumAttempts: 3,
+    maximumAttempts: 2,
     initialInterval: "5s",
     backoffCoefficient: 2,
   },
 });
 
-const { prepareSitespeedRun, parseSitespeedMetrics, enrichFromPotato } =
-  proxyActivities<typeof activities>({
-    startToCloseTimeout: "30 minutes",
-    heartbeatTimeout: "2 minutes",
-    retry: {
-      maximumAttempts: 3,
-      initialInterval: "5s",
-      backoffCoefficient: 2,
-    },
-  });
+const {
+  ensurePotatoVolume,
+  ensurePotato,
+  startPotato,
+  waitPotatoHealthy,
+  stopPotato,
+  stopAllPotatoContainers,
+  pruneEngineResources,
+  refreshPotatoCatalog,
+  refreshPotatoBaseline,
+  resetPotatoStats,
+} = proxyActivities<typeof activities>({
+  startToCloseTimeout: "30 minutes",
+  heartbeatTimeout: "2 minutes",
+  retry: {
+    maximumAttempts: 1,
+  },
+});
 
-const { warmupSitespeedCache, measureSitespeed } = proxyActivities<
+const {
+  prepareSitespeedRun,
+  parseSitespeedMetrics,
+  parseSitespeedCpuMetrics,
+  enrichFromPotato,
+  aggregateMeasureRuns,
+} = proxyActivities<typeof activities>({
+  startToCloseTimeout: "30 minutes",
+  heartbeatTimeout: "2 minutes",
+  retry: {
+    maximumAttempts: 1,
+  },
+});
+
+/** Slim cache fill — soft ~2m budget; failures are non-fatal inside the activity. */
+const { warmupSitespeedCache } = proxyActivities<typeof activities>({
+  startToCloseTimeout: "2 minutes",
+  heartbeatTimeout: "1 minute",
+  retry: {
+    maximumAttempts: 1,
+  },
+});
+
+const { measureSitespeed, measureSitespeedCpu } = proxyActivities<
   typeof activities
 >({
   startToCloseTimeout: "90 minutes",
   heartbeatTimeout: "2 minutes",
   retry: {
-    maximumAttempts: sitespeedActivityMaxAttempts(),
-    initialInterval: "10s",
-    backoffCoefficient: 2,
+    maximumAttempts: 1,
   },
 });
 
-const { burnPotatoOverlay, emitInfluxMetrics, uploadSitespeedArtifacts } =
-  proxyActivities<typeof activities>({
-    startToCloseTimeout: "30 minutes",
-    heartbeatTimeout: "2 minutes",
-    retry: {
-      maximumAttempts: 2,
-      initialInterval: "5s",
-      backoffCoefficient: 2,
-    },
-  });
+const {
+  burnPotatoOverlay,
+  emitInfluxMetrics,
+  emitInfluxCpuMetrics,
+  uploadSitespeedArtifacts,
+} = proxyActivities<typeof activities>({
+  startToCloseTimeout: "30 minutes",
+  heartbeatTimeout: "2 minutes",
+  retry: {
+    maximumAttempts: 1,
+  },
+});
+
+const { planAutostartTick, startAutostartSitespeed } = proxyActivities<
+  typeof activities
+>({
+  startToCloseTimeout: "10 minutes",
+  heartbeatTimeout: "2 minutes",
+  retry: {
+    maximumAttempts: 1,
+  },
+});
 
 export async function siteSpeedTestWorkflow(
   input: SiteSpeedTestInput,
 ): Promise<SiteSpeedTestResult> {
   const normalized = normalizeSiteSpeedInput(input);
-  const { runId } = workflowInfo();
 
   // Auth + session URL resolution runs on the worker host (not through PotatoNetwork).
   const entry = await resolveEntryUrl({
     tld: normalized.tld,
     tableId: normalized.tableId,
     direct: normalized.direct,
+    country: normalized.country,
+    locale: normalized.locale,
+    currency: normalized.currency,
   });
+
+  let potato: Awaited<ReturnType<typeof ensurePotato>> | undefined;
+  let handle: SitespeedRunHandle | undefined;
+  let measureExitCode = 0;
 
   try {
     await ensurePotatoVolume();
 
-    const potato = await startPotato({
-      runId,
+    potato = await ensurePotato({
       country: normalized.country,
       tier: normalized.tier,
-      namePrefix: "potato-ss",
     });
-
-    let handle: SitespeedRunHandle | undefined;
-    let measureExitCode = 0;
+    await waitPotatoHealthy(potato);
+    await resetPotatoStats(potato);
 
     try {
-      await waitPotatoHealthy(potato);
-
       handle = await prepareSitespeedRun({
         potatoContainer: potato.containerName,
         potatoApiBaseUrl: potato.apiBaseUrl,
@@ -114,47 +149,67 @@ export async function siteSpeedTestWorkflow(
       });
 
       if (normalized.cacheMode === "warm") {
-        await warmupSitespeedCache(handle);
-        await resetPotatoStats(potato);
+        try {
+          await warmupSitespeedCache(handle);
+        } catch (err) {
+          // Activity soft-timeout / unexpected throw — keep whatever profile exists.
+          if (isCancellation(err)) throw err;
+          log.warn("warmupSitespeedCache failed (continuing)", { err });
+        }
       }
 
-      const measured = await measureSitespeed(handle);
-      measureExitCode = measured.exitCode;
+      for (let runIndex = 1; runIndex <= MEASURE_RUNS; runIndex++) {
+        await resetPotatoStats(potato);
+        const measured = await measureSitespeed(handle, { runIndex });
+        measureExitCode = measured.exitCode;
+        await parseSitespeedMetrics(handle, { runIndex });
+        await enrichFromPotato(handle, { runIndex });
+      }
 
-      await parseSitespeedMetrics(handle);
-      await enrichFromPotato(handle);
+      const agg = await aggregateMeasureRuns(handle, { runs: MEASURE_RUNS });
+      handle = { ...handle, resultsRoot: agg.resultsRoot };
+
+      try {
+        await burnPotatoOverlay(handle);
+      } catch (err) {
+        if (isCancellation(err)) throw err;
+        log.warn("burnPotatoOverlay failed (non-fatal)", { err });
+      }
+
+      try {
+        await emitInfluxMetrics(handle);
+      } catch (err) {
+        if (isCancellation(err)) throw err;
+        log.warn("emitInfluxMetrics failed (non-fatal)", { err });
+      }
+
+      try {
+        await uploadSitespeedArtifacts(handle);
+      } catch (err) {
+        if (isCancellation(err)) throw err;
+        log.warn("uploadSitespeedArtifacts failed (non-fatal)", { err });
+      }
+
+      // Dedicated CPU pass — only CPU fields go to Influx.
+      await resetPotatoStats(potato);
+      await measureSitespeedCpu(handle);
+      await parseSitespeedCpuMetrics(handle);
+      try {
+        await emitInfluxCpuMetrics(handle);
+      } catch (err) {
+        if (isCancellation(err)) throw err;
+        log.warn("emitInfluxCpuMetrics failed (non-fatal)", { err });
+      }
     } finally {
-      // Always tear down Potato even when the workflow is cancelled mid-run.
-      await CancellationScope.nonCancellable(async () => {
-        await stopPotato(potato);
-      });
+      if (potato) {
+        await CancellationScope.nonCancellable(async () => {
+          await resetPotatoStats(potato!);
+        });
+      }
     }
 
-    // Post-Potato steps (overlay / Influx / S3). Not reached if measure/enrich
-    // threw (including cancel) — error rethrows after the Potato finally.
-    if (!handle) {
+    if (!handle || !potato) {
       throw new Error("sitespeed run handle missing after measure");
-    }
-
-    try {
-      await burnPotatoOverlay(handle);
-    } catch (err) {
-      if (isCancellation(err)) throw err;
-      log.warn("burnPotatoOverlay failed (non-fatal)", { err });
-    }
-
-    try {
-      await emitInfluxMetrics(handle);
-    } catch (err) {
-      if (isCancellation(err)) throw err;
-      log.warn("emitInfluxMetrics failed (non-fatal)", { err });
-    }
-
-    try {
-      await uploadSitespeedArtifacts(handle);
-    } catch (err) {
-      if (isCancellation(err)) throw err;
-      log.warn("uploadSitespeedArtifacts failed (non-fatal)", { err });
     }
 
     return {
@@ -181,11 +236,30 @@ export async function siteSpeedTestWorkflow(
   }
 }
 
-/** Stable workflow id recommended: "potato-refresh" */
+/**
+ * Stable workflow id recommended: "potato-refresh".
+ * Tears down Potato sidecars, prunes stale engine disk usage (no image pull),
+ * then refreshes catalog/baseline on a short-lived passthrough container.
+ */
 export async function potatoRefreshWorkflow(): Promise<PotatoRefreshResult> {
   const { runId } = workflowInfo();
 
-  const pulled = await pullUsedImages();
+  let pruneSummary = {
+    removedContainers: 0,
+    removedVolumes: 0,
+    removedResultDirs: 0,
+  };
+
+  await CancellationScope.nonCancellable(async () => {
+    await stopAllPotatoContainers();
+    const pruned = await pruneEngineResources();
+    pruneSummary = {
+      removedContainers: pruned.removedContainers.length,
+      removedVolumes: pruned.removedVolumes.length,
+      removedResultDirs: pruned.removedResultDirs.length,
+    };
+  });
+
   await ensurePotatoVolume();
 
   const potato = await startPotato({
@@ -203,11 +277,40 @@ export async function potatoRefreshWorkflow(): Promise<PotatoRefreshResult> {
       potatoContainer: potato.containerName,
       catalogOk: catalog.ok === true,
       baselineProbedAt: baseline.probedAt,
-      pulledImages: pulled.images,
+      prune: pruneSummary,
     };
   } finally {
     await CancellationScope.nonCancellable(async () => {
       await stopPotato(potato);
     });
   }
+}
+
+/**
+ * Schedule tick: skip if any non-autostart workflow is Running on the queue;
+ * otherwise start next JSON job (potatoRefresh first when index is 0).
+ *
+ * Refresh runs as a child workflow so we never hold the sole activity slot
+ * while Potato refresh activities need to run (MAX_CONCURRENT_ACTIVITIES=1).
+ */
+export async function autostartWorkflow(): Promise<AutostartTickResult> {
+  const { workflowId, runId } = workflowInfo();
+  const plan = await planAutostartTick({ excludeWorkflowId: workflowId });
+  if (plan.status === "skipped") return plan;
+
+  let refreshed = false;
+  if (plan.needRefresh) {
+    await executeChild(potatoRefreshWorkflow, {
+      workflowId: `potato-refresh-autostart-${runId}`,
+      args: [],
+    });
+    refreshed = true;
+  }
+
+  return startAutostartSitespeed({
+    job: plan.job,
+    jobIndex: plan.jobIndex,
+    refreshed,
+    excludeWorkflowId: workflowId,
+  });
 }

@@ -1,0 +1,51 @@
+{
+  "autostart": [
+    {
+      "metricPrefix": "lobby",
+      "country": "BD",
+      "tier": "typical",
+      "tld": "example.com",
+      "cacheMode": "cold",
+      "locale": "EN",
+      "currency": "EUR"
+    },
+    {
+      "metricPrefix": "lobby",
+      "country": "BD",
+      "tier": "typical",
+      "tld": "example.com",
+      "cacheMode": "warm",
+      "locale": "EN",
+      "currency": "EUR"
+    },
+    {
+      "metricPrefix": "blackjack",
+      "country": "BD",
+      "tier": "typical",
+      "tld": "example.com",
+      "tableId": "REPLACE_WITH_TABLE_ID",
+      "direct": true,
+      "cacheMode": "cold",
+      "locale": "EN",
+      "currency": "EUR"
+    },
+    {
+      "metricPrefix": "blackjack",
+      "country": "BD",
+      "tier": "typical",
+      "tld": "example.com",
+      "tableId": "REPLACE_WITH_TABLE_ID",
+      "direct": true,
+      "cacheMode": "warm",
+      "locale": "EN",
+      "currency": "EUR"
+    },
+    {
+      "metricPrefix": "lobby",
+      "country": "DE",
+      "tier": "typical",
+      "tld": "example.com",
+      "cacheMode": "cold"
+    }
+  ]
+}

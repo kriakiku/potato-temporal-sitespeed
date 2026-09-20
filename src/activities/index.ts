@@ -4,8 +4,10 @@ export {
 
 export {
   startPotato,
+  ensurePotato,
   waitPotatoHealthy,
   stopPotato,
+  stopAllPotatoContainers,
   refreshPotatoCatalog,
   refreshPotatoBaseline,
   resetPotatoStats,
@@ -15,13 +17,19 @@ export {
   prepareSitespeedRun,
   warmupSitespeedCache,
   measureSitespeed,
+  measureSitespeedCpu,
   parseSitespeedMetrics,
+  parseSitespeedCpuMetrics,
   enrichFromPotato,
+  aggregateMeasureRuns,
   burnPotatoOverlay,
   emitInfluxMetrics,
+  emitInfluxCpuMetrics,
   uploadSitespeedArtifacts,
 } from "./sitespeed";
 
 export { resolveEntryUrl, deleteMasterSession } from "./auth";
 
-export { pullUsedImages } from "./pull-images";
+export { pruneEngineResources } from "./prune-engine";
+
+export { planAutostartTick, startAutostartSitespeed } from "./autostart";

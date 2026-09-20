@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import { NativeConnection, Worker } from "@temporalio/worker";
 import * as activities from "./activities/index";
 import { getEnv } from "./lib/env";
@@ -6,8 +5,6 @@ import {
   temporalConnectionOptions,
   temporalTlsLogFlags,
 } from "./lib/temporal-connect";
-
-const require = createRequire(import.meta.url);
 
 async function main(): Promise<void> {
   const env = getEnv();
@@ -25,7 +22,6 @@ async function main(): Promise<void> {
       temporalTlsCa: tlsFlags.temporalTlsCa,
       potatoImage: env.potatoImage,
       sitespeedImage: env.sitespeedImage,
-      sitespeedMaxAttempts: env.sitespeedMaxAttempts,
       sitespeedResultsDir: env.sitespeedResultsDir,
       influxWriteUrl: env.influxWriteUrl ?? null,
       volume: env.potatoDataVolume,
@@ -38,10 +34,6 @@ async function main(): Promise<void> {
     await temporalConnectionOptions(env),
   );
 
-  // Inject SITESPEED_MAX_ATTEMPTS into the workflow bundle as a string literal
-  // so workflow code stays deterministic (no runtime process.env in the isolate).
-  const webpack = require("webpack") as typeof import("webpack");
-
   const worker = await Worker.create({
     connection,
     namespace: env.temporalNamespace,
@@ -50,19 +42,6 @@ async function main(): Promise<void> {
     activities,
     maxConcurrentActivityTaskExecutions: env.maxConcurrentActivities,
     maxConcurrentLocalActivityExecutions: env.maxConcurrentActivities,
-    bundlerOptions: {
-      webpackConfigHook: (config) => {
-        config.plugins = [
-          ...(config.plugins ?? []),
-          new webpack.DefinePlugin({
-            "process.env.SITESPEED_MAX_ATTEMPTS": JSON.stringify(
-              String(env.sitespeedMaxAttempts),
-            ),
-          }),
-        ];
-        return config;
-      },
-    },
   });
 
   await worker.run();

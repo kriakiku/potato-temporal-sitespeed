@@ -2,13 +2,14 @@
 
 Example of wiring **[potato-network](https://github.com/kriakiku/potato-network)** + **[Temporal](https://temporal.io/)** + **[sitespeed.io](https://www.sitespeed.io/)** together.
 
-A Bun Temporal worker starts a per-run PotatoNetwork sidecar (via Podman/Docker Engine API), runs sitespeed.io through that network namespace, writes **local JSON/HTML/media**, then separate Temporal activities:
+A Bun Temporal worker ensures a **long-lived** PotatoNetwork sidecar per `country`/`tier` (via Podman/Docker Engine API), runs sitespeed.io through that network namespace **three times** (separate browser containers, `-n 1` each), aggregates stats like browsertime (median/mean/…), then:
 
-1. Parse sitespeed JSON (`analysisstorer`) → `potato-metrics.json`
-2. Enrich with Potato profile / baseline / catalog + DNS/TLS/HTTP/WS stats (+ event timeline) → `potato-enrichment.json`
-3. Burn a custom ASS overlay via ffmpeg (`burnPotatoOverlay`) → `{browser}.potato.mp4`
-4. Emit **Influx line protocol** over HTTP to [VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/integrations/datain/) (`/write`) or any Influx-compatible endpoint
-5. Optionally upload screenshot/video/HTML to S3 (native video keeps browsertime’s timer; overlay is a separate object)
+1. Parse + aggregate sitespeed JSON → `potato-metrics.json` (field + `_median`/`_mean`/… suffixes; bare = median)
+2. Enrich with Potato profile / baseline / catalog + DNS/TLS/HTTP/WS stats (aggregated across runs) → `potato-enrichment.json`
+3. Burn a custom ASS overlay via ffmpeg (`burnPotatoOverlay`) from the median run’s video → `{browser}.potato.mp4`
+4. Emit **Influx line protocol** for the main metrics
+5. Run a dedicated **CPU-only** sitespeed pass (`--cpu`), emit only CPU fields
+6. Optionally upload screenshot/video/HTML to S3
 
 Treat this repo as a reference integration, not a product.
 
@@ -18,23 +19,77 @@ Treat this repo as a reference integration, not a product.
 
 Activities (visible in Temporal UI):
 
-1. `resolveEntryUrl` — demo auth APIs (`demo.{tld}` / optional `lobby.{tld}`) **before** Potato starts (auth is not shaped)
-2. `ensurePotatoVolume` / `startPotato` / `waitPotatoHealthy`
+1. `resolveEntryUrl` — demo auth APIs (`demo.{tld}` / optional `lobby.{tld}`) **before** Potato (auth is not shaped)
+2. `ensurePotatoVolume` / `ensurePotato` / `waitPotatoHealthy` / `resetPotatoStats` — reuse `potato-{COUNTRY}-{tier}` if healthy
 3. `prepareSitespeedRun` — result dir, browsertime scripts, namespace/slug
-4. Optional warm path: `warmupSitespeedCache` → `resetPotatoStats`
-5. `measureSitespeed` — `sitespeedio/sitespeed.io:40.0.0-plus1` once (`-n 1`) with `--network container:<potato>`, `--video`, multi journey, etc.
-6. `parseSitespeedMetrics` → `enrichFromPotato` (while Potato is still up)
-7. Tear down Potato (`stopPotato`, non-cancellable cleanup)
-8. `burnPotatoOverlay` → `emitInfluxMetrics` → `uploadSitespeedArtifacts` (non-fatal failures; cancel still propagates)
+4. Optional warm: `warmupSitespeedCache` (no Potato net, no video/CPU/axe/LH; soft ~2m; non-fatal)
+5. Loop ×3: `resetPotatoStats` → `measureSitespeed` (`-n 1`, video, **no** `--cpu`) → `parseSitespeedMetrics` → `enrichFromPotato`
+6. `aggregateMeasureRuns` — median/mean/mdev/min/p10/p90/p99/max; pick median run for artifacts
+7. `burnPotatoOverlay` → `emitInfluxMetrics` → `uploadSitespeedArtifacts` (non-fatal)
+8. `resetPotatoStats` → `measureSitespeedCpu` → `parseSitespeedCpuMetrics` → `emitInfluxCpuMetrics`
+9. `resetPotatoStats` end — Potato container **stays up** (torn down only by refresh)
 
-Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on (GPSI off), optional `cpuThrottlingRate`, `cacheMode` cold|warm. Chrome runs with `prefers-color-scheme: dark` (`blink-settings=preferredColorScheme=0`).
+Chrome mobile emulation: **Samsung Galaxy A51/71**, `connectivity=native` (Potato shapes), Lighthouse on for measure (GPSI off), optional `cpuThrottlingRate`, `cacheMode` cold|warm. Chrome runs with `prefers-color-scheme: dark` (`blink-settings=preferredColorScheme=0`).
 
 ### `potatoRefreshWorkflow`
 
-1. Pulls configured images (`POTATO_IMAGE`, `SITESPEED_IMAGE`) so floating tags like `:latest` are refreshed
-2. Passthrough Potato on the shared volume → `POST /v1/catalog/refresh` + `POST /v1/baseline/probe`
+1. `stopAllPotatoContainers` — tear down every `potato-*` sidecar
+2. `pruneEngineResources` — remove leftover `potato-*` / `sitespeed-*` containers, unused networks/volumes (keeps the Potato data volume), dangling images, build cache, and old local result dirs (keeps 20 newest). **Does not** pull images.
+3. Short-lived passthrough Potato on the shared volume → `POST /v1/catalog/refresh` + `POST /v1/baseline/probe`, then stop that container
 
-Use a stable workflow id (`potato-refresh`). Does not recreate the Temporal worker container itself.
+Country sidecars are recreated lazily on the next `ensurePotato`. Use a stable workflow id (`potato-refresh`).
+
+### `autostartWorkflow`
+
+Short Schedule tick (manual start also works). Keeps **manual** `start-test` / `start-refresh` unchanged.
+
+1. If any **Running** workflow on `TEMPORAL_TASK_QUEUE` other than this autostart run → complete immediately (`skipped: busy`)
+2. Else read `CONFIG_PATH` (`config.json` with `{ "autostart": [...] }`) and round-robin index from `AUTOSTART_STATE_PATH`
+3. When `nextIndex` points at job **0** (start of a pass, including first ever run) → `executeChild(potatoRefreshWorkflow)` and wait
+4. Start `siteSpeedTestWorkflow` for that job (fire-and-forget), then write `nextIndex = (i+1) % N`
+
+**Hot-reload:** edit `CONFIG_PATH` anytime — the worker re-reads when mtime changes (no restart). Invalid JSON → tick skipped until fixed. Index is clamped if the list shrinks.
+
+Example ([`config.example.json`](config.example.json)):
+
+```json
+{
+  "autostart": [
+    {
+      "metricPrefix": "lobby",
+      "country": "BD",
+      "tier": "typical",
+      "tld": "example.com",
+      "cacheMode": "cold",
+      "locale": "EN",
+      "currency": "EUR"
+    },
+    {
+      "metricPrefix": "blackjack",
+      "country": "BD",
+      "tld": "example.com",
+      "tableId": "REPLACE_WITH_TABLE_ID",
+      "direct": true,
+      "cacheMode": "warm"
+    }
+  ]
+}
+```
+
+Required per autostart job: `metricPrefix`, `country`, `tld`. Optional: `tier`, `tableId`, `direct`, `cacheMode`, `locale`, `currency`, `browser`, `cpuThrottlingRate`. Top-level keys besides `autostart` are reserved for future config.
+
+Upsert the Schedule once:
+
+```bash
+# Bind-mount the same dir as SITESPEED_RESULTS_DIR so config/state survive restarts
+cp config.example.json /var/lib/potato-sitespeed-results/config.json
+# edit config… (picked up on next schedule tick)
+
+export AUTOSTART_SCHEDULE_INTERVAL=5m   # optional, default 5m
+bun run start-autostart-schedule
+```
+
+Schedule id: `potato-sitespeed-autostart`. Each tick gets a unique workflow id from Temporal.
 
 ## Requirements
 
@@ -164,30 +219,35 @@ Optional local Temporal: `temporal server start-dev`
 | `tableId` | no | — | When set, passed into session / enter-table |
 | `direct` | no | `true` | No `tableId` → always `true` (metrics). With `tableId` → `input.direct`, default `true` (enter-table); set `false` for lobby+table |
 | `browser` | no | `chrome` | sitespeed `-b` |
-| `cacheMode` | no | `cold` | `cold` (cache clear, one sitespeed) \| `warm` (warmup sitespeed + Potato stats reset + measure with shared Chrome profile) |
+| `cacheMode` | no | `cold` | `cold` (cache clear each of 3 measures) \| `warm` (slim warmup off Potato + 3 measures with shared Chrome profile) |
 | `cpuThrottlingRate` | no | — | Chrome `CPUThrottlingRate` (integer ≥ 1, e.g. `4`). Unset → no CPU throttling |
+| `locale` | no | — | Optional demo manager profile locale (e.g. `EN`). Unset → keep GET `/api/v2/profile` value |
+| `currency` | no | — | Optional demo manager current currency (e.g. `EUR`). Unset → keep profile `balance.current` |
 
-Sitespeed always runs with **`-n 1`**. Prefer more frequent Temporal workflows over multiple iterations in one run.
+Each Temporal workflow runs sitespeed **three times** with **`-n 1`** (separate browser containers + Potato stats reset between). Metrics are aggregated to browsertime-style leaves (`median`, `mean`, `mdev`, `min`, `p10`, `p90`, `p99`, `max`). Influx fields: bare name = median, plus `field_median` / `field_mean` / …. A fourth pass with `--cpu` only writes CPU series.
 
 ### Warm cache
 
-`cacheMode=warm` does **not** double-navigate inside the journey (that polluted Potato stats). Instead:
+`cacheMode=warm` does **not** double-navigate inside the journey. Instead:
 
-1. sitespeed `-n 1` with shared `user-data-dir` under the result dir (no video / no Lighthouse) — fills Chrome HTTP cache  
-2. `POST /v1/stats/reset` on Potato  
-3. sitespeed `-n 1` again with the **same** profile — measure + video; Potato counters cover only this run  
+1. Slim sitespeed on the **default bridge** (no Potato net / MITM), shared `user-data-dir`, no video / CPU / axe / Lighthouse — fills Chrome HTTP cache (soft ~2 minute activity timeout; failure is non-fatal)
+2. Three measure runs on Potato with the **same** profile + video; Potato counters reset before each run
+3. After main Influx emit: one CPU-only measure on Potato (stats reset first); only CPU fields are written
 
-`cacheMode=cold` is a single measure run with `--browsertime.cacheClearRaw`.
+`cacheMode=cold` is three measure runs with `--browsertime.cacheClearRaw` each (no shared profile).
 
-Cancel: Temporal workflow cancellation stops the in-flight sitespeed/ffmpeg container (AbortSignal → Podman stop/rm), then always tears down Potato and deletes the demo master session in non-cancellable cleanup. Post-Potato steps (`burnPotatoOverlay` / Influx / S3) are skipped when cancel happens during measure/enrich.
+Cancel: Temporal workflow cancellation stops the in-flight sitespeed/ffmpeg container (AbortSignal → Podman stop/rm), resets Potato stats, and deletes the demo master session. Long-lived Potato containers are **not** removed on cancel (only `potatoRefreshWorkflow` stops them all).
 
 ### Entry URL
 
 1. `POST https://demo.{tld}/api/v2/auth/token` — body `{ password, identifier }` and, when `DEMO_AUTH_AUTHENTICATOR` is set, `extra: { code }` (current TOTP)
-2. `POST https://demo.{tld}/api/go/v1/master-sessions/start` (Bearer)  
+2. `GET https://demo.{tld}/api/v2/profile` (Bearer) → build PATCH body
+3. `PATCH https://demo.{tld}/api/v3/managers/profile` — `country` = workflow emulation country; optional `locale` / current `currency` from job input (otherwise keep profile values); `timeZoneOffset`, `gameSettings.ip` / `limitSettings` / `balance` from profile
+4. `POST https://demo.{tld}/api/go/v1/master-sessions/start` with `{ "extend": true }` (lobby only) → read `msid` → `POST …/bulk-delete` that id (clear current session)
+5. `POST https://demo.{tld}/api/go/v1/master-sessions/start` again (Bearer) for the real run  
    body `{"extend":true}` or `{"tableId":"…","extend":true}` — returns `frameUrl` + `msid`
-3. If `direct=true` **and** `tableId` is set: `POST https://lobby.{tld}/api/v1/enter-table`
-4. After the run (success, failure, or cancel): `POST https://demo.{tld}/api/go/v1/master-sessions/bulk-delete` with `{ "masterSessionIds": [msid] }` (re-auth; best-effort)
+6. If `direct=true` **and** `tableId` is set: `POST https://lobby.{tld}/api/v1/enter-table`
+7. After the run (success, failure, or cancel): `POST https://demo.{tld}/api/go/v1/master-sessions/bulk-delete` with `{ "masterSessionIds": [msid] }` (re-auth; best-effort)
 
 sitespeed opens the returned `frameUrl` (URL is **not** used as a Telegraf tag).
 
@@ -258,7 +318,7 @@ After measure (and Potato enrich), activity `burnPotatoOverlay` burns a custom A
 
 ### Fullscreen tap
 
-Each run stages a browsertime **multi journey** (`bt-measure-journey.js`, run with `--multi`) that opens the entry URL under `commands.measure` via raw Selenium `driver.get` (not `commands.navigate`, which would block on `pageCompleteCheck` first), injects CSS to hide `[data-test-id="fullScreen"]` (`display:none!important`, no wait/click), then `wait.byPageToComplete()` before `measure.stop`. Warm cache is a separate sitespeed pass with a shared Chrome profile (see above), not an in-script pre-navigate.
+Each run stages a browsertime **multi journey** (`bt-measure-journey.js`, run with `--multi`) that opens the entry URL under `commands.measure` via raw Selenium `driver.get` (not `commands.navigate`, which would block on `pageCompleteCheck` first), injects CSS to hide `[data-test-id="fullScreen"]` (`display:none!important`, no wait/click), then `wait.byPageToComplete()` before `measure.stop`. Warm cache is a separate slim sitespeed pass (no Potato network) with a shared Chrome profile (see above), not an in-script pre-navigate.
 
 Unset `INFLUX_WRITE_URL` → metrics emit is skipped (logged once).
 
@@ -331,8 +391,10 @@ All config is process env (no `.env` file).
 | `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Influx write host |
 | `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse. Worker installs Potato MITM CA + `ignore-certificate-errors` / `disable-quic`; Chrome also gets SwiftShader WebGPU/WebGL args |
 | `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse |
-| `SITESPEED_MAX_ATTEMPTS` | `1` | Temporal activity retries for `measureSitespeed` / `warmupSitespeedCache` |
 | `SITESPEED_RESULTS_DIR` | `/tmp/potato-sitespeed-results` | Absolute **engine-host** path; when worker is containerized, bind-mount the same path (see Local result files) |
+| `CONFIG_PATH` | `{SITESPEED_RESULTS_DIR}/config.json` | Potato config JSON (`{ "autostart": [ SiteSpeedTestInput, … ] }`) |
+| `AUTOSTART_STATE_PATH` | `{SITESPEED_RESULTS_DIR}/autostart-state.json` | Persisted `{ "nextIndex": N }` across container restarts |
+| `AUTOSTART_SCHEDULE_INTERVAL` | `5m` | Used by `bun run start-autostart-schedule` |
 | `INFLUX_WRITE_URL` | — | HTTP write URL (e.g. `http://vm:8428/write`). Skip emit if unset |
 | `INFLUX_WRITE_USERNAME` / `INFLUX_WRITE_PASSWORD` | — | Optional Basic auth |
 | `INFLUX_WRITE_TOKEN` | — | Optional Bearer token (wins over Basic) |
@@ -363,6 +425,8 @@ export TEMPORAL_TLS_SERVER_NAME=temporal.example.com  # optional SNI
 Cert and key must be set together. Same ENV applies to `worker`, `start-test`, and `start-refresh`. Mount cert files into the worker container when running under Podman/Docker.
 
 `MAX_CONCURRENT_ACTIVITIES` (default `1`) caps parallel activities **per worker process**. Two worker replicas on the same queue can still run two sitespeed jobs at once; refresh activities share the same slot.
+
+Activity retries: **1** attempt for all activities except `resolveEntryUrl` / `deleteMasterSession` (**2**).
 
 On each Potato start the worker resolves Influx write / S3 hosts to IPv4 and appends them to `POTATONETWORK_SHAPE_EXCLUDE` so export endpoints are not shaped/MITM’d.
 
