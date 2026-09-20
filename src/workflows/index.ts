@@ -80,28 +80,24 @@ const { warmupSitespeedCache } = proxyActivities<typeof activities>({
   },
 });
 
-const { measureSitespeed, measureSitespeedCpu } = proxyActivities<
-  typeof activities
->({
-  startToCloseTimeout: "90 minutes",
-  heartbeatTimeout: "2 minutes",
-  retry: {
-    maximumAttempts: 1,
-  },
-});
+/** Browser runs: long startToClose; heartbeats every ~10s while container runs. */
+const { measureSitespeed, measureSitespeedCpu, burnPotatoOverlay } =
+  proxyActivities<typeof activities>({
+    startToCloseTimeout: "90 minutes",
+    heartbeatTimeout: "5 minutes",
+    retry: {
+      maximumAttempts: 1,
+    },
+  });
 
-const {
-  burnPotatoOverlay,
-  emitInfluxMetrics,
-  emitInfluxCpuMetrics,
-  uploadSitespeedArtifacts,
-} = proxyActivities<typeof activities>({
-  startToCloseTimeout: "30 minutes",
-  heartbeatTimeout: "2 minutes",
-  retry: {
-    maximumAttempts: 1,
-  },
-});
+const { emitInfluxMetrics, emitInfluxCpuMetrics, uploadSitespeedArtifacts } =
+  proxyActivities<typeof activities>({
+    startToCloseTimeout: "30 minutes",
+    heartbeatTimeout: "2 minutes",
+    retry: {
+      maximumAttempts: 1,
+    },
+  });
 
 const { planAutostartTick, startAutostartSitespeed } = proxyActivities<
   typeof activities

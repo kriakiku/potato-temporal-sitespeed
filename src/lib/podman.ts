@@ -426,84 +426,98 @@ export const podman = {
       throw new PodmanCancelledError(`cancelled before start: ${opts.name}`);
     }
 
-    await this.removeContainer(opts.name, true);
-    await pullImage(opts.image);
-
-    let container: Dockerode.Container;
-    try {
-      const d = await engine();
-      container = await d.createContainer(toCreateOptions(opts));
-      await container.start();
-    } catch (err) {
-      throw new PodmanError(`failed to start ${opts.name}`, err);
-    }
-
+    // Heartbeat from the start — image pull / create can exceed activity
+    // heartbeatTimeout if we only tick after container.wait().
     const tick = setInterval(() => onTick?.(), 10_000);
-    let cancelled = false;
-    const onAbort = () => {
-      cancelled = true;
-      void this.stopContainer(container.id, 3).finally(() => {
-        void this.removeContainer(container.id, true);
-      });
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
+    onTick?.();
 
-    let exitCode = 1;
+    let container: Dockerode.Container | undefined;
     try {
-      if (signal?.aborted) {
-        onAbort();
-        throw new PodmanCancelledError(`cancelled: ${opts.name}`);
+      await this.removeContainer(opts.name, true);
+      onTick?.();
+      await pullImage(opts.image);
+      onTick?.();
+
+      try {
+        const d = await engine();
+        container = await d.createContainer(toCreateOptions(opts));
+        await container.start();
+      } catch (err) {
+        throw new PodmanError(`failed to start ${opts.name}`, err);
       }
 
-      const result = await Promise.race([
-        container.wait(),
-        abortPromise(signal),
-      ]);
+      let cancelled = false;
+      const onAbort = () => {
+        cancelled = true;
+        if (!container) return;
+        void this.stopContainer(container.id, 3).finally(() => {
+          void this.removeContainer(container!.id, true);
+        });
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
 
-      if (result === ABORTED || cancelled || signal?.aborted) {
-        throw new PodmanCancelledError(`cancelled: ${opts.name}`);
+      let exitCode = 1;
+      try {
+        if (signal?.aborted) {
+          onAbort();
+          throw new PodmanCancelledError(`cancelled: ${opts.name}`);
+        }
+
+        const result = await Promise.race([
+          container.wait(),
+          abortPromise(signal),
+        ]);
+
+        if (result === ABORTED || cancelled || signal?.aborted) {
+          throw new PodmanCancelledError(`cancelled: ${opts.name}`);
+        }
+
+        exitCode =
+          typeof result === "object" && result && "StatusCode" in result
+            ? Number((result as { StatusCode: number }).StatusCode)
+            : 1;
+      } catch (err) {
+        if (
+          err instanceof PodmanCancelledError ||
+          cancelled ||
+          signal?.aborted
+        ) {
+          if (container) {
+            await this.stopContainer(container.id, 3).catch(() => undefined);
+            await this.removeContainer(container.id, true).catch(
+              () => undefined,
+            );
+          }
+          throw err instanceof PodmanCancelledError
+            ? err
+            : new PodmanCancelledError(`cancelled: ${opts.name}`);
+        }
+        throw err;
+      } finally {
+        signal?.removeEventListener("abort", onAbort);
       }
 
-      exitCode =
-        typeof result === "object" && result && "StatusCode" in result
-          ? Number((result as { StatusCode: number }).StatusCode)
-          : 1;
-    } catch (err) {
-      if (
-        err instanceof PodmanCancelledError ||
-        cancelled ||
-        signal?.aborted
-      ) {
-        await this.stopContainer(container.id, 3).catch(() => undefined);
-        await this.removeContainer(container.id, true).catch(() => undefined);
-        throw err instanceof PodmanCancelledError
-          ? err
-          : new PodmanCancelledError(`cancelled: ${opts.name}`);
+      let stdout = "";
+      let stderr = "";
+      try {
+        const buf = (await container.logs({
+          stdout: true,
+          stderr: true,
+          follow: false,
+          timestamps: false,
+        })) as Buffer;
+        const demuxed = demuxDockerLogs(new Uint8Array(buf));
+        stdout = demuxed.stdout;
+        stderr = demuxed.stderr;
+      } catch {
+        // ignore log fetch errors
       }
-      throw err;
+
+      await this.removeContainer(container.id, true);
+      return { exitCode, stdout, stderr };
     } finally {
-      signal?.removeEventListener("abort", onAbort);
       clearInterval(tick);
     }
-
-    let stdout = "";
-    let stderr = "";
-    try {
-      const buf = (await container.logs({
-        stdout: true,
-        stderr: true,
-        follow: false,
-        timestamps: false,
-      })) as Buffer;
-      const demuxed = demuxDockerLogs(new Uint8Array(buf));
-      stdout = demuxed.stdout;
-      stderr = demuxed.stderr;
-    } catch {
-      // ignore log fetch errors
-    }
-
-    await this.removeContainer(container.id, true);
-    return { exitCode, stdout, stderr };
   },
 };
 

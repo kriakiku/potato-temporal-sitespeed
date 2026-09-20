@@ -938,6 +938,7 @@ export async function burnPotatoOverlay(
       sitespeedImage: env.sitespeedImage,
       outputName,
       signal,
+      onTick: () => heartbeat({ step: "overlay-burn-running" }),
     });
 
     enrichment.overlayMeta.burned = true;

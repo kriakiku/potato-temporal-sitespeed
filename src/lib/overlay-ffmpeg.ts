@@ -17,6 +17,8 @@ export type BurnOverlayInput = {
   durationMs?: number;
   /** Temporal / caller cancellation — stops ffprobe/ffmpeg containers */
   signal?: AbortSignal;
+  /** Optional heartbeat tick (e.g. Temporal activity heartbeat). */
+  onTick?: () => void;
 };
 
 export type BurnOverlayResult = {
@@ -32,6 +34,7 @@ async function probeDurationMs(
   containerInput: string,
   binds: string[],
   signal?: AbortSignal,
+  onTick?: () => void,
 ): Promise<number | undefined> {
   try {
     const { exitCode, stdout } = await podman.runToCompletion(
@@ -50,7 +53,7 @@ async function probeDurationMs(
         ],
         binds,
       },
-      undefined,
+      onTick,
       signal,
     );
     if (exitCode !== 0) return undefined;
@@ -93,6 +96,7 @@ export async function burnOverlayOntoVideo(
       containerIn,
       binds,
       input.signal,
+      input.onTick,
     );
   }
   if (durationMs === undefined || durationMs < 1000) {
@@ -141,7 +145,7 @@ export async function burnOverlayOntoVideo(
       ],
       binds,
     },
-    undefined,
+    input.onTick,
     input.signal,
   );
 
