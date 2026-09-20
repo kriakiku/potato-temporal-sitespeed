@@ -113,7 +113,7 @@ function assertAss(ass: string): void {
 async function main(): Promise<void> {
   const sitespeedImage =
     process.env.SITESPEED_IMAGE?.trim() ||
-    "sitespeedio/sitespeed.io:40.0.0-plus1";
+    "ghcr.io/kriakiku/potato-sitespeed.io:40.0.0-plus1";
   const outRoot = resolve(process.env.E2E_OUT?.trim() || ".e2e-out");
   const workDir = join(outRoot, `overlay-${Date.now()}`);
   const engine = whichEngine();

@@ -96,7 +96,7 @@ Schedule id: `potato-sitespeed-autostart`. Each tick gets a unique workflow id f
 - [Bun](https://bun.sh/) ≥ 1.1
 - [Podman](https://podman.io/) (or Docker) on the worker host
 - Temporal Server (`TEMPORAL_ADDRESS`)
-- Pull access to `ghcr.io/kriakiku/potato-network` and `sitespeedio/sitespeed.io`
+- Pull access to `ghcr.io/kriakiku/potato-network` and `ghcr.io/kriakiku/potato-sitespeed.io` (or build `Dockerfile.sitespeed` locally)
 - Optional: VictoriaMetrics (or Influx) reachable via `INFLUX_WRITE_URL`
 - Optional: S3-compatible bucket for latest screenshot/video/HTML
 
@@ -104,7 +104,7 @@ Schedule id: `potato-sitespeed-autostart`. Each tick gets a unique workflow id f
 
 ## E2E: sitespeed CLI (CI)
 
-Smoke on the real `sitespeedio/sitespeed.io` image with the same `buildSitespeedBrowserArgs` + staged journey (`--multi`) as production. No Potato, no live session — catches `startsWith` / missing-script regressions.
+Smoke on the default `ghcr.io/kriakiku/potato-sitespeed.io` image (sitespeed.io + Noto fonts) with the same `buildSitespeedBrowserArgs` + staged journey (`--multi`) as production. No Potato, no live session — catches `startsWith` / missing-script regressions.
 
 ```bash
 bun run e2e:sitespeed-cli
@@ -389,7 +389,7 @@ All config is process env (no `.env` file).
 | `POTATO_RULES_EXPR` | — | Absolute **engine-host** path to `rules.expr`; bind-mounted to `/data/rules.expr` |
 | `POTATONETWORK_API_TOKEN` | — | Optional |
 | `POTATONETWORK_SHAPE_EXCLUDE` | — | Extra CIDRs/IPs; merged with auto-resolved S3/Influx write host |
-| `SITESPEED_IMAGE` | `sitespeedio/sitespeed.io:40.0.0-plus1` | plus1 = Lighthouse. Worker installs Potato MITM CA + `ignore-certificate-errors` / `disable-quic`; Chrome also gets SwiftShader WebGPU/WebGL args |
+| `SITESPEED_IMAGE` | `ghcr.io/kriakiku/potato-sitespeed.io:40.0.0-plus1` | sitespeed.io plus1 + Noto fonts (Bengali etc.). Rebuild/publish via Actions → **Publish sitespeed image** (`workflow_dispatch`). Upstream base: `sitespeedio/sitespeed.io:40.0.0-plus1`. Worker installs Potato MITM CA + `ignore-certificate-errors` / `disable-quic`; Chrome also gets SwiftShader WebGPU/WebGL args |
 | `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse |
 | `SITESPEED_RESULTS_DIR` | `/tmp/potato-sitespeed-results` | Absolute **engine-host** path; when worker is containerized, bind-mount the same path (see Local result files) |
 | `CONFIG_PATH` | `{SITESPEED_RESULTS_DIR}/config.json` | Potato config JSON (`{ "autostart": [ SiteSpeedTestInput, … ] }`) |

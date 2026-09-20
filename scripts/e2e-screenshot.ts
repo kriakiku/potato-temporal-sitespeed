@@ -10,7 +10,7 @@
  *   E2E_COUNTRY=DE           — Potato country profile (omit for passthrough)
  *   E2E_TIER=typical
  *   POTATO_IMAGE=ghcr.io/kriakiku/potato-network:latest
- *   SITESPEED_IMAGE=sitespeedio/sitespeed.io:40.0.0-plus1
+ *   SITESPEED_IMAGE=ghcr.io/kriakiku/potato-sitespeed.io:40.0.0-plus1
  *   E2E_BLACK_THRESHOLD=0.92
  *   E2E_OUT=.e2e-out
  */
@@ -129,7 +129,7 @@ async function main(): Promise<void> {
   const url = process.env.SITESPEED_E2E_URL?.trim() || DEFAULT_URL;
   const sitespeedImage =
     process.env.SITESPEED_IMAGE?.trim() ||
-    "sitespeedio/sitespeed.io:40.0.0-plus1";
+    "ghcr.io/kriakiku/potato-sitespeed.io:40.0.0-plus1";
   const potatoImage =
     process.env.POTATO_IMAGE?.trim() ||
     "ghcr.io/kriakiku/potato-network:latest";

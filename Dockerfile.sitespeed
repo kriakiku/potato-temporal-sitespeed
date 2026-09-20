@@ -1,0 +1,6 @@
+# sitespeed.io + Noto fonts (Bengali and other scripts) for non-Latin UI screenshots.
+FROM sitespeedio/sitespeed.io:40.0.0-plus1
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      fonts-noto-core fonts-noto-ui-core fontconfig \
+    && fc-cache -fv && rm -rf /var/lib/apt/lists/*

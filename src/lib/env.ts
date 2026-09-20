@@ -174,7 +174,7 @@ export function getEnv(): WorkerEnv {
     potatoRulesExpr: optional("POTATO_RULES_EXPR"),
     sitespeedImage: optional(
       "SITESPEED_IMAGE",
-      "sitespeedio/sitespeed.io:40.0.0-plus1",
+      "ghcr.io/kriakiku/potato-sitespeed.io:40.0.0-plus1",
     )!,
     demoAuthIdentifier: optional("DEMO_AUTH_IDENTIFIER"),
     demoAuthPassword: optional("DEMO_AUTH_PASSWORD"),

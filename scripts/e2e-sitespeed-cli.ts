@@ -18,7 +18,7 @@ import { buildSitespeedBrowserArgs } from "../src/shared/sitespeed-args";
 /** Docs page + synthetic auth hash — must survive into bt-measure-journey.js. */
 const DEFAULT_URL =
   "https://kriakiku.github.io/potato-network/#masterSessionId=e2e-ci-hash-check";
-const DEFAULT_IMAGE = "sitespeedio/sitespeed.io:40.0.0-plus1";
+const DEFAULT_IMAGE = "ghcr.io/kriakiku/potato-sitespeed.io:40.0.0-plus1";
 const HOST_FIRST_IFRAME = fileURLToPath(
   new URL("./bt-first-iframe.js", import.meta.url),
 );
