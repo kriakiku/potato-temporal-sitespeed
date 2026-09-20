@@ -20,6 +20,8 @@ describe("buildSitespeedBrowserArgs", () => {
     const i = args.indexOf("--browsertime.videoParams.addTimer");
     expect(i).toBeGreaterThanOrEqual(0);
     expect(args[i + 1]).toBe("true");
+    expect(args).toContain("--sustainable.enable");
+    expect(args).not.toContain("--sustainable.useGreenWebHostingAPI");
     expect(args).toContain("--browsertime.script");
     expect(args).toContain("/sitespeed.io/bt-first-iframe.js");
     expect(args.at(-1)).toBe("https://example.com/");

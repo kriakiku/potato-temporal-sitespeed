@@ -106,6 +106,9 @@ export function buildSitespeedBrowserArgs(
     "disable-quic",
     // Chrome timeline + long tasks; sustainability + axe plugins
     "--cpu",
+    // Local greencheck via bind-mounted url2green.json.gz (see url2green.ts).
+    // Never pass --sustainable.useGreenWebHostingAPI — without the local file
+    // @tgwf/co2 falls through to greencheckmulti HTTP.
     "--sustainable.enable",
     "--axe.enable",
     "--browsertime.timeouts.pageCompleteCheck",

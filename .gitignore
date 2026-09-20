@@ -11,3 +11,5 @@ coverage/
 agent-tools/
 .e2e-out/
 .e2e-cli-out/
+.url2green/
+**/url2green.json.gz

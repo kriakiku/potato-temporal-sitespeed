@@ -225,7 +225,7 @@ Measurements (tags include `metricPrefix`, `country`, `tier`, `cacheMode`, `dire
 | `potato_coach` | `score`, `performanceScore`, `bestpracticeScore`, `privacyScore`, DOM info |
 | `potato_axe` | `violationsCritical` / `Serious` / `Moderate` / `Minor` |
 | `potato_lighthouse` | Category scores 0–100 + `audit_first_contentful_paint` (and LCP/TBT/CLS) |
-| `potato_sustainable` | `co2PerPageView`, `co2FirstParty`, `co2ThirdParty`, `totalCO2` |
+| `potato_sustainable` | `co2PerPageView`, `co2FirstParty`, `co2ThirdParty`, `totalCO2` (hosting check uses **local** url2green, not the Green Web API) |
 | `potato_thirdparty` | `requestsTotal` / `requestsPercentage`; tagged `thirdPartyCategory` / `tool` |
 | `potato_profile` | `delayMs`, Mbps, `lossPercent`, `cfRttMs`, `hostCfRttMs`, … |
 | `potato_dns` | per-`domain`: `count`, `errorCount`, `latencyAvgMs`, … |
@@ -239,6 +239,12 @@ Measurements (tags include `metricPrefix`, `country`, `tier`, `cacheMode`, `dire
 | `potato_overlay` | Event marker counts from Potato stats (`wsMarkers` / `apiMarkers` / shown ≤6, `firstIframeMs`); `burned` always false (no custom ASS) |
 
 Host tags replace the workflow `tld` apex with `{tld}` (e.g. `api.example.com` → `api.{tld}`). Query strings never appear in tags.
+
+### Sustainable greencheck (local only)
+
+`--sustainable.enable` is on. Official `sitespeedio/sitespeed.io:40+` images **omit** `url2green.json.gz` (~87MB) unless built with `DOWNLOAD_URL2GREEN=true`. Without that file, `@tgwf/co2` treats empty data as “use API” and calls `api.thegreenwebfoundation.org/v2/greencheckmulti/…`.
+
+The worker downloads [sitespeedio/url2green](https://github.com/sitespeedio/url2green) once to `{SITESPEED_RESULTS_DIR}/.url2green/url2green.json.gz` (override with `SITESPEED_URL2GREEN_PATH`) and bind-mounts that directory into the sitespeed container. We never pass `--sustainable.useGreenWebHostingAPI`.
 
 ### Video timer
 
@@ -320,6 +326,7 @@ All config is process env (no `.env` file).
 | `SITESPEED_LIGHTHOUSE` | `true` | Set `false` to skip Lighthouse |
 | `SITESPEED_MAX_ATTEMPTS` | `1` | Temporal activity retries for `runSitespeed` |
 | `SITESPEED_RESULTS_DIR` | `/tmp/potato-sitespeed-results` | Absolute **engine-host** path; when worker is containerized, bind-mount the same path (see Local result files) |
+| `SITESPEED_URL2GREEN_PATH` | `{SITESPEED_RESULTS_DIR}/.url2green/url2green.json.gz` | Absolute path to url2green `.gz` (or its directory) for local sustainable greencheck |
 | `INFLUX_WRITE_URL` | — | HTTP write URL (e.g. `http://vm:8428/write`). Skip emit if unset |
 | `INFLUX_WRITE_USERNAME` / `INFLUX_WRITE_PASSWORD` | — | Optional Basic auth |
 | `INFLUX_WRITE_TOKEN` | — | Optional Bearer token (wins over Basic) |

@@ -36,6 +36,11 @@ import {
   type InfluxPoint,
 } from "../lib/influx";
 import {
+  ensureUrl2GreenFile,
+  resolveUrl2GreenHostPath,
+  sitespeedUrl2GreenBind,
+} from "../lib/url2green";
+import {
   buildArtifactNamespace,
   buildResultSlug,
   metricTagsFromDims,
@@ -424,6 +429,25 @@ export async function runSitespeed(
     await mkdir(chromeProfileDir, { recursive: true });
   }
 
+  const url2GreenGz = resolveUrl2GreenHostPath(
+    env.sitespeedResultsDir,
+    env.sitespeedUrl2GreenPath,
+  );
+  try {
+    const u2g = await ensureUrl2GreenFile(url2GreenGz);
+    log.info("url2green ready for local greencheck", {
+      path: u2g.path,
+      downloaded: u2g.downloaded,
+    });
+  } catch (err) {
+    throw new Error(
+      `Failed to prepare local url2green (needed so sustainable does not call the Green Web API): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  const url2GreenBind = sitespeedUrl2GreenBind(url2GreenGz);
+
   try {
     await copyFile(
       HOST_FIRST_IFRAME_SCRIPT,
@@ -502,6 +526,7 @@ export async function runSitespeed(
         binds: [
           `${env.potatoDataVolume}:/potato-data:ro`,
           `${resultDir}:/sitespeed.io`,
+          url2GreenBind,
         ],
         env: {
           NODE_EXTRA_CA_CERTS: "/potato-data/ca/potatonetwork-ca.pem",
