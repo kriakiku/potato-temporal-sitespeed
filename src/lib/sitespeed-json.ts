@@ -320,7 +320,8 @@ export function extractBrowsertimeFields(json: unknown): {
     undefined;
   if (custom) {
     const fi = pickStat(custom.firstIframeMs) ?? asNumber(custom.firstIframeMs);
-    if (fi !== undefined) out.firstIframeMs = fi;
+    // Probe miss / legacy -1 must not become a dashboard value.
+    if (fi !== undefined && fi >= 0) out.firstIframeMs = fi;
   }
 
   return { fields: out, tagged };
@@ -599,7 +600,7 @@ export async function loadFirstIframeMs(
 ): Promise<number | undefined> {
   const bundle = await loadSitespeedMetrics(resultRoot);
   const v = bundle.browsertime.firstIframeMs;
-  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "number" && Number.isFinite(v) && v >= 0) return v;
   return undefined;
 }
 

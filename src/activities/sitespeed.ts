@@ -752,12 +752,16 @@ export async function enrichFromPotato(
     // empty bundle
   }
 
-  const firstIframeMs =
+  const rawFirstIframe =
     typeof metrics.browsertime.firstIframeMs === "number"
       ? metrics.browsertime.firstIframeMs
       : typeof metrics.browsertime.firstIframeMs_median === "number"
         ? metrics.browsertime.firstIframeMs_median
         : undefined;
+  const firstIframeMs =
+    typeof rawFirstIframe === "number" && rawFirstIframe >= 0
+      ? rawFirstIframe
+      : undefined;
   const overlayTimeline = buildOverlayTimeline({
     events: stats.events ?? [],
     pageUrl: handle.url,
@@ -769,7 +773,9 @@ export async function enrichFromPotato(
     apiMarkers: overlayTimeline.api.length,
     wsShown: lastN(overlayTimeline.ws, OVERLAY_SLOT_LIMIT).length,
     apiShown: lastN(overlayTimeline.api, OVERLAY_SLOT_LIMIT).length,
-    firstIframeMs: overlayTimeline.firstIframeMs,
+    ...(overlayTimeline.firstIframeMs >= 0
+      ? { firstIframeMs: overlayTimeline.firstIframeMs }
+      : {}),
     burned: false,
   };
 
@@ -826,13 +832,12 @@ export async function aggregateMeasureRuns(
           http: [],
           websocket: [],
         },
-        overlayTimeline: { markers: [], ws: [], api: [], firstIframeMs: 0 },
+        overlayTimeline: { markers: [], ws: [], api: [], firstIframeMs: -1 },
         overlayMeta: {
           wsMarkers: 0,
           apiMarkers: 0,
           wsShown: 0,
           apiShown: 0,
-          firstIframeMs: 0,
           burned: false,
         },
       });
@@ -843,11 +848,12 @@ export async function aggregateMeasureRuns(
   await writeJsonFile(potatoMetricsPath(handle.runRoot), aggregated);
 
   const pickValues = bundles.map((b) => {
+    const fi = b.browsertime.firstIframeMs;
     const v =
       b.browsertime.visual_SpeedIndex ??
       b.browsertime.pageLoadTime ??
       b.browsertime.fullyLoaded ??
-      b.browsertime.firstIframeMs;
+      (typeof fi === "number" && fi >= 0 ? fi : undefined);
     return typeof v === "number" && Number.isFinite(v) ? v : Number.NaN;
   });
   const medianIdx0 = medianSampleIndex(pickValues);

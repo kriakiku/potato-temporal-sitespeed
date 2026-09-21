@@ -1,11 +1,9 @@
 /**
  * Browsertime --script: first iframe time (ms since navigation).
- * Uses Resource Timing when available; else performance.now() at detection.
- * Waits via MutationObserver until timeout.
+ * Sync read only — journey installs a non-blocking probe after driver.get
+ * (`window.__potatoFirstIframeMs`). Never waits / never returns -1.
  */
-module.exports = async function () {
-  var TIMEOUT_MS = 60000;
-
+module.exports = function () {
   function measureIframeMs(iframe) {
     if (!iframe) return -1;
     var src = (iframe.src || iframe.getAttribute("src") || "").split(/[?#]/)[0];
@@ -27,36 +25,15 @@ module.exports = async function () {
     return measureIframeMs(document.querySelector("iframe"));
   }
 
+  var probed =
+    typeof window.__potatoFirstIframeMs === "number"
+      ? window.__potatoFirstIframeMs
+      : -1;
+  if (probed >= 0) return { firstIframeMs: probed };
+
   var immediate = tryFind();
   if (immediate >= 0) return { firstIframeMs: immediate };
 
-  return new Promise(function (resolve) {
-    var settled = false;
-    function done(ms) {
-      if (settled) return;
-      settled = true;
-      try {
-        obs.disconnect();
-      } catch (_) {}
-      clearTimeout(timer);
-      resolve({ firstIframeMs: ms });
-    }
-
-    var obs = new MutationObserver(function () {
-      var ms = tryFind();
-      if (ms >= 0) done(ms);
-    });
-    obs.observe(document.documentElement || document.body, {
-      childList: true,
-      subtree: true,
-    });
-
-    var timer = setTimeout(function () {
-      done(-1);
-    }, TIMEOUT_MS);
-
-    // Race: iframe may appear between querySelector and observe
-    var again = tryFind();
-    if (again >= 0) done(again);
-  });
+  // No iframe — omit metric (do not emit -1 / do not block).
+  return {};
 };

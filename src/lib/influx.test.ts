@@ -143,6 +143,13 @@ describe("extractBrowsertimeFields", () => {
     expect(fields.firstIframeMs).toBe(1234);
   });
 
+  test("omits negative firstIframeMs from browsertime custom", () => {
+    const { fields } = extractBrowsertimeFields({
+      custom: { firstIframeMs: -1 },
+    });
+    expect(fields.firstIframeMs).toBeUndefined();
+  });
+
   test("cpu longTasks and heap", () => {
     const { fields, tagged } = extractBrowsertimeFields({
       statistics: {
@@ -368,5 +375,57 @@ describe("buildInfluxPoints sitespeed plugins", () => {
         p.tags?.cpuCategory === "scriptEvaluation",
     );
     expect(btCpu?.fields.median).toBe(55);
+  });
+
+  test("potato_overlay omits missing or negative firstIframeMs", () => {
+    const without = buildInfluxPoints({
+      tags: { metricPrefix: "lobby", country: "BD" },
+      workflowTld: "example.com",
+      browsertime: {},
+      pagexray: {},
+      coach: {},
+      axe: {},
+      lighthouse: {},
+      sustainable: {},
+      thirdparty: {},
+      profile: {},
+      baseline: {},
+      stats: { dns: [], tlsClient: [], tlsUpstream: [] },
+      overlay: {
+        wsMarkers: 1,
+        apiMarkers: 2,
+        wsShown: 1,
+        apiShown: 2,
+        burned: false,
+      },
+    });
+    const ov = without.find((p) => p.measurement === "potato_overlay");
+    expect(ov?.fields.firstIframeMs).toBeUndefined();
+
+    const withIframe = buildInfluxPoints({
+      tags: { metricPrefix: "lobby", country: "BD" },
+      workflowTld: "example.com",
+      browsertime: {},
+      pagexray: {},
+      coach: {},
+      axe: {},
+      lighthouse: {},
+      sustainable: {},
+      thirdparty: {},
+      profile: {},
+      baseline: {},
+      stats: { dns: [], tlsClient: [], tlsUpstream: [] },
+      overlay: {
+        wsMarkers: 0,
+        apiMarkers: 0,
+        wsShown: 0,
+        apiShown: 0,
+        firstIframeMs: 1500,
+        burned: true,
+      },
+    });
+    const ov2 = withIframe.find((p) => p.measurement === "potato_overlay");
+    expect(ov2?.fields.firstIframeMs).toBe(1500);
+    expect(ov2?.fields.burned).toBe(true);
   });
 });

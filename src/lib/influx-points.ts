@@ -19,7 +19,8 @@ export type OverlayInfluxMeta = {
   apiMarkers: number;
   wsShown: number;
   apiShown: number;
-  firstIframeMs: number;
+  /** Omit when iframe was not observed (do not emit -1). */
+  firstIframeMs?: number;
   burned: boolean;
 };
 
@@ -247,17 +248,23 @@ export function buildInfluxPoints(input: {
   }
 
   if (input.overlay) {
+    const overlayFields: Record<string, number | boolean> = {
+      wsMarkers: input.overlay.wsMarkers,
+      apiMarkers: input.overlay.apiMarkers,
+      wsShown: input.overlay.wsShown,
+      apiShown: input.overlay.apiShown,
+      burned: input.overlay.burned ? true : false,
+    };
+    if (
+      typeof input.overlay.firstIframeMs === "number" &&
+      input.overlay.firstIframeMs >= 0
+    ) {
+      overlayFields.firstIframeMs = input.overlay.firstIframeMs;
+    }
     points.push({
       measurement: "potato_overlay",
       tags,
-      fields: {
-        wsMarkers: input.overlay.wsMarkers,
-        apiMarkers: input.overlay.apiMarkers,
-        wsShown: input.overlay.wsShown,
-        apiShown: input.overlay.apiShown,
-        firstIframeMs: input.overlay.firstIframeMs,
-        burned: input.overlay.burned ? true : false,
-      },
+      fields: overlayFields,
     });
   }
 
