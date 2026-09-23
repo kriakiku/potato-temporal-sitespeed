@@ -5,6 +5,7 @@ import {
   temporalConnectionOptions,
   temporalTlsLogFlags,
 } from "./lib/temporal-connect";
+import { startPollWatch } from "./lib/worker-poll-watch";
 
 async function main(): Promise<void> {
   const env = getEnv();
@@ -43,6 +44,10 @@ async function main(): Promise<void> {
     maxConcurrentActivityTaskExecutions: env.maxConcurrentActivities,
     maxConcurrentLocalActivityExecutions: env.maxConcurrentActivities,
   });
+
+  // Exit if the gRPC session dies but the process stays up, so Restart=always
+  // brings a worker that actually polls back.
+  startPollWatch(() => worker.getStatus());
 
   await worker.run();
 }

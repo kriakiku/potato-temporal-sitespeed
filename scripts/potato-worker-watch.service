@@ -1,0 +1,7 @@
+[Unit]
+Description=Restart potato sitespeed worker when Temporal has no pollers
+After=potato-worker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/potato-worker/watch-pollers.sh
